@@ -1,0 +1,14 @@
+import { initializeApp, applicationDefault } from 'firebase-admin/app';
+import { getFirestore } from 'firebase-admin/firestore';
+import { FieldValue } from 'firebase-admin/firestore';
+
+const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.QA_PROJECT_ID || 'theforge-dev-1771601127';
+const app = initializeApp({ projectId }, 'qa-platform');
+export const db = getFirestore(app);
+export { FieldValue };
+
+export const COLLECTIONS = {
+  CANARY_RUNS: 'qa_canary_runs',
+  FINDINGS: 'qa_findings',
+  AGENT_SESSIONS: 'qa_agent_sessions',
+} as const;

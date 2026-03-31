@@ -1,0 +1,20 @@
+{
+  "name": "sparfuchs-qa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sparfuchs QA Platform — canaries, scripts, docs, and test fixtures",
+  "scripts": {
+    "canaries": "tsx canaries/index.ts",
+    "qa:quick": "tsx canaries/index.ts",
+    "qa:report-push": "tsx scripts/qa-report-adapter.ts",
+    "qa:nightly": "tsx scripts/trigger-nightly-regression.ts",
+    "qa:seed-baselines": "tsx scripts/seed-ai-baselines.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
