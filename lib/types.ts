@@ -17,21 +17,7 @@ export interface QaCanaryRun {
   environment: 'local' | 'cloud-build' | 'nightly';
   timestamp: any;
   results: CanaryResult[];
-  summary: {
-    total: number;
-    passed: number;
-    failed: number;
-    bySeverity: { LOW: number; MEDIUM: number; HIGH: number };
-  };
+  summary: { total: number; passed: number; failed: number; bySeverity: { LOW: number; MEDIUM: number; HIGH: number } };
   source: 'local' | 'cloud-build' | 'nightly';
   forecastNotes?: string;
-}
-
-export interface AgentSession {
-  sessionId: string;
-  type: 'evolve';
-  timestamp: any;
-  inputSummary: string;
-  suggestions: string[];
-  accepted: boolean | null;
 }
