@@ -1,10 +1,8 @@
 ---
 paths:
-  - "src/api/**"
-  - "src/auth/**"
-  - "src/middleware/**"
-  - "**/routes/**"
-  - "**/controllers/**"
+  - "lib/**"
+  - "scripts/**"
+  - "canaries/**"
 ---
 
 # Security

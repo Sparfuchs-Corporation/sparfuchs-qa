@@ -5,5 +5,4 @@ dist/
 *.log
 .DS_Store
 CLAUDE.local.md
-CLAUDE.local.md
-CLAUDE.local.md
+qa-reports/

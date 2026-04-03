@@ -1,49 +1,37 @@
 # Project Instructions
 
-> REPLACE: Customize this file for your project. Delete sections that don't apply — every line costs tokens. Code style lives in .claude/rules/code-quality.md — don't duplicate here. Run `/setupdotclaude` to auto-customize, or edit manually and delete all `> REPLACE:` blocks when done.
-
 ## Commands
 
 ```bash
-# Build
-npm run build            # or: cargo build, go build ./..., make build
+# Typecheck
+npx tsc --noEmit
 
-# Test
-npm test                 # run full suite
-npm test -- path/to/file # run single test file
+# Run canaries
+npm run canaries         # or: make qa-quick
+make qa-push             # run + push results to Firestore
 
-# Lint & Format
-npm run lint             # check style
-npm run lint:fix         # auto-fix style
-npm run typecheck        # type checking
+# Scripts
+npm run qa:report-push   # push QA report to Firestore
+npm run qa:nightly       # trigger nightly regression
+npm run qa:seed-baselines # seed AI baselines
 
-# Dev
-npm run dev              # start dev server
+# QA evolve
+make qa-evolve           # evolve canaries
+make qa-evolve-dry       # dry run
+
+# Setup
+make qa-setup            # npm ci
 ```
 
 ## Architecture
 
-> REPLACE: Describe non-obvious architectural decisions. Don't list files — Claude can explore.
-
-- `src/` — application source
-- `src/api/` — REST endpoints (versioned: `/v1/`)
-- `src/services/` — business logic (no direct DB access from controllers)
-- `src/models/` — data models and types
-
-## Key Decisions
-
-> REPLACE: Record WHY non-obvious choices were made. This is the most valuable section. Examples: "Auth tokens in httpOnly cookies because XSS risk", "Billing is a separate module for audit independence".
-
-## Domain Knowledge
-
-> REPLACE: Terms, abbreviations, or concepts that aren't obvious from the code. Example: "SKU" = Stock Keeping Unit, the unique product identifier from our warehouse system.
+- `canaries/` — QA canary checks (code-quality, security, perf, i18n, rbac)
+- `scripts/` — Report adapters, nightly triggers, baseline seeding, qa-evolve
+- `lib/` — Shared code (Firestore client, types)
+- `docs/` — QA onboarding, testing guide, architecture
 
 ## Workflow
 
 - Run typecheck after making a series of code changes
 - Prefer fixing the root cause over adding workarounds
 - When unsure about approach, use plan mode (`Shift+Tab`) before coding
-
-## Don'ts
-
-- Don't modify generated files (`*.gen.ts`, `*.generated.*`)
