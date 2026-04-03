@@ -11,4 +11,5 @@ export const COLLECTIONS = {
   CANARY_RUNS: 'qa_canary_runs',
   FINDINGS: 'qa_findings',
   AGENT_SESSIONS: 'qa_agent_sessions',
+  FLAKY_TESTS: 'qa_flaky_tests',
 } as const;

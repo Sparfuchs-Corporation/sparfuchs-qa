@@ -157,20 +157,21 @@ For each:
 | Condition | Agent | Type |
 |---|---|---|
 | Always | `@code-reviewer` | Analysis |
-| Dependency files changed | `@sca-reviewer` | Analysis |
+| Always (or when deps change) | `@dependency-auditor` | Analysis |
+| Dependency files changed (package.json, lockfile) | `@sca-reviewer` | Analysis |
 | Security-sensitive files (auth, crypto, tokens) | `@security-reviewer` | Analysis |
 | Performance-sensitive files (endpoints, DB, loops) | `@performance-reviewer` | Analysis |
 | Documentation changed (.md, docstrings) | `@doc-reviewer` | Analysis |
 | API routes or DB operations changed | `@crud-tester` | Generator |
+| Frontend files changed (.tsx, .jsx, .vue, .css, .html) | `@a11y-reviewer` | Analysis |
+| API route handlers AND client-side fetch/axios calls exist | `@contract-reviewer` | Generator |
+| Route/navigation structure changed | `@e2e-tester` | Generator |
+| Test failures detected during execution | `@failure-analyzer` | Analysis |
 
-Additional agents added in later phases (skill will be updated):
-- `@a11y-reviewer` — when JSX/TSX/HTML/CSS change (Phase 2)
-- `@contract-reviewer` — when API boundary files change (Phase 2)
-- `@e2e-tester` — when user journey routes change (Phase 2)
-- `@dependency-auditor` — on every run or when deps change (Phase 2)
-- `@compliance-reviewer` — when data models/user data change (Phase 3)
-- `@iac-reviewer` — when Terraform/Docker/CI files change (Phase 3)
-- `@fixture-generator` — when type definitions change (Phase 3)
+Future agents (Phase 3+):
+- `@compliance-reviewer` — when data models/user data change
+- `@iac-reviewer` — when Terraform/Docker/CI files change
+- `@fixture-generator` — when type definitions change
 
 ## Step 6: Write Final Report
 
