@@ -8,7 +8,11 @@
     "qa:quick": "tsx canaries/index.ts",
     "qa:report-push": "tsx scripts/qa-report-adapter.ts",
     "qa:nightly": "tsx scripts/trigger-nightly-regression.ts",
-    "qa:seed-baselines": "tsx scripts/seed-ai-baselines.ts"
+    "qa:seed-baselines": "tsx scripts/seed-ai-baselines.ts",
+    "qa:sca": "tsx scripts/package-verify.ts",
+    "qa:verify": "tsx scripts/package-verify.ts --dry-run",
+    "qa:flaky": "tsx scripts/flaky-test-tracker.ts --report",
+    "qa:flaky-track": "tsx scripts/flaky-test-tracker.ts"
   },
   "devDependencies": {
     "tsx": "^4.7.0",

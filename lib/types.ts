@@ -9,6 +9,33 @@ export interface CanaryResult {
   timestamp: string;
 }
 
+export interface QaFlakyTest {
+  testFile: string;
+  testName: string;
+  status: 'candidate' | 'confirmed' | 'fixed';
+  flipCount: number;
+  lastFlipAt: any;
+  lastPassAt: any;
+  lastFailAt: any;
+  quarantined: boolean;
+  createdAt: any;
+}
+
+export interface QaSbomEntry {
+  type: 'library';
+  name: string;
+  version: string;
+  purl: string;
+  scope: 'required' | 'optional';
+}
+
+export interface GeneratedManifestEntry {
+  file: string;
+  agent: string;
+  timestamp: string;
+  targetCommit: string;
+}
+
 export interface QaCanaryRun {
   runId: string;
   projectId: string;
