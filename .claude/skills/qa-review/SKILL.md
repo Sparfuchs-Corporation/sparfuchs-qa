@@ -5,7 +5,13 @@ argument-hint: "[output directory — default: qa-reports/]"
 disable-model-invocation: true
 ---
 
-Comprehensive QA review that discovers a project, assesses risk, delegates to specialist agents, and produces two local output files: a structured session log and a final QA report.
+Comprehensive QA review that discovers a project, assesses risk, delegates to specialist agents, and produces exactly two local output files: a structured session log and a final QA report.
+
+**CRITICAL RULES**:
+- You must produce EXACTLY 2 output files. No more. All agent output goes inline into these two files.
+- Do NOT create additional files in `qa-reports/` (no raw JSON dumps, no per-agent output files, no intermediate results).
+- File names MUST use today's calendar date (the date the review is run), NOT commit dates, analysis timestamps, or git log dates.
+- All raw agent output, execution results, and intermediate data goes into the session log. The report gets the synthesized summary only.
 
 ## Step 0: Intake Interview
 
@@ -18,12 +24,14 @@ Before any analysis, gather project metadata using AskUserQuestion. Ask all four
 
 Parse `$ARGUMENTS` for the output directory. Default to `qa-reports/` at the sparfuchs-qa repo root.
 
-Generate:
+Generate using **today's date** (run `date '+%Y-%m-%d'` via Bash to get it — do NOT use commit dates or git log dates):
 - **Run ID**: `qa-{YYYYMMDD}-{HHmm}-{random 4 hex chars}`
-- **Timestamp**: ISO 8601
-- **File names**:
+- **Timestamp**: today's date and current time in ISO 8601
+- **File names** (use today's date, NOT any date from git history):
   - `{output-dir}/{YYYY-MM-DD}_{project-name-slug}_session-log.md`
   - `{output-dir}/{YYYY-MM-DD}_{project-name-slug}_qa-report.md`
+
+These are the ONLY two files you will create. Do not create any other files in the output directory.
 
 Create the output directory if it doesn't exist (use Bash `mkdir -p`).
 
@@ -140,8 +148,8 @@ For each:
    - Each entry: `{ "file": "{path}", "agent": "{name}", "timestamp": "{ISO}", "targetCommit": "{SHA}" }`
 5. Attempt execution: run `npx tsx {generated-script}` via Bash
    - If external tool not installed (k6, etc.): log `"Script generated but not executed — {tool} not installed"`
-   - If executed: capture stdout/stderr, save raw output to `qa-reports/` directory
-6. Append generation summary and execution results to session log
+   - If executed: capture stdout/stderr
+6. Append generation summary and execution results (including raw output) **inline to the session log** — do NOT create separate output files
 7. Collect findings from execution results for the report
 
 ### Agent Routing Table

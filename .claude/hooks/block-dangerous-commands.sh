@@ -95,7 +95,7 @@ if echo "$COMMAND" | grep -qE '(curl|wget)[[:space:]].*\|[[:space:]]*(bash|sh|zs
 fi
 
 # Block disk/partition destructive commands
-if echo "$COMMAND" | grep -qE '(mkfs|dd[[:space:]]+if=|>[[:space:]]*/dev/)'; then
+if echo "$COMMAND" | grep -qE '(mkfs|dd[[:space:]]+if=|>[[:space:]]*/dev/(sd|hd|nvme|vd|xvd|disk|null|zero))'; then
   deny "Blocked: destructive disk operation detected. This can cause irreversible data loss."
 fi
 
