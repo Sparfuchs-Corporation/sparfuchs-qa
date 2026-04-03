@@ -1,7 +1,7 @@
 ---
 name: qa-review
 description: Full QA review — intake interview, project discovery, risk triage, specialist agent delegation, and dual-file output (session log + report).
-argument-hint: "[output directory — default: qa-reports/]"
+argument-hint: "[--full] [output directory — default: qa-reports/]"
 disable-model-invocation: true
 ---
 
@@ -96,22 +96,48 @@ Append a `## Discovery` section to the session log using Edit with the full prof
 
 ## Step 3: Determine Review Scope
 
-Determine what code to review:
+Check if `$ARGUMENTS` contains `--full`. This determines the review mode:
+
+### Full Repo Audit (`--full` flag present)
+
+When `--full` is passed, review ALL source files in the repo — not just a diff. This is a complete project audit.
+
+1. Use Glob to find all source files in the target repo:
+   - `**/*.ts`, `**/*.tsx`, `**/*.js`, `**/*.jsx` (excluding `node_modules/`, `dist/`, `.next/`, `build/`)
+   - `**/*.py` (excluding `__pycache__/`, `.venv/`, `venv/`)
+   - `**/*.go`, `**/*.rs`, `**/*.rb`, `**/*.java` as applicable
+   - `**/*.css`, `**/*.scss`, `**/*.html`, `**/*.vue`, `**/*.svelte`
+   - `Dockerfile*`, `docker-compose*`, `*.yaml`, `*.yml` (CI/IaC files)
+2. Log scope as: `Full repo audit — {N} source files`
+3. All agents run regardless of risk level (treat as Critical risk)
+4. Agents analyze the full file list, not a diff — they read and review every file
+5. Generator agents scan the entire codebase for test generation opportunities
+
+This mode is designed for first-time project onboarding or periodic full audits. It will take significantly longer than a diff review.
+
+### Diff Review (default — no `--full` flag)
+
+Review only what changed:
 
 - **If `git diff --cached` has content**: review staged changes
 - **If `git diff` has content**: review unstaged changes
 - **If neither**: review the last commit via `git diff HEAD~1`
 - **If the user provides a PR number via the intake or arguments**: fetch with `gh pr diff {number}`
 
-Log the scope decision to the session log under `## Scope`.
-
 If there are no changes to review, write that to both files and stop.
+
+### Log Scope
+
+Log the scope decision to the session log under `## Scope`, including:
+- Mode: `Full repo audit` or `Diff review`
+- File count or diff stats
+- What triggered this scope (flag, staged, unstaged, last commit, PR number)
 
 ## Step 4: Risk Triage
 
-Delegate to `@risk-analyzer` with the target repo path and the diff from Step 3.
+**If `--full` mode**: Skip risk triage. Set risk to CRITICAL (all agents run). Log "Full audit mode — all agents will run" to session log under `## Risk Triage`.
 
-Append the full risk-analyzer output to the session log under `## Risk Triage`.
+**If diff mode**: Delegate to `@risk-analyzer` with the target repo path and the diff from Step 3. Append the full risk-analyzer output to the session log under `## Risk Triage`.
 
 Use the overall risk score to determine which agents to invoke:
 
@@ -120,7 +146,7 @@ Use the overall risk score to determine which agents to invoke:
 | **Low** | `@code-reviewer`, `@doc-reviewer` (if docs changed) |
 | **Medium** | Above + `@security-reviewer` (if security-sensitive), `@performance-reviewer` (if perf-sensitive) |
 | **High** | Above + `@sca-reviewer` (if deps changed), `@crud-tester` (if API/DB changed) |
-| **Critical** | All available agents regardless of file type |
+| **Critical / Full** | All available agents regardless of file type |
 
 Always invoke `@code-reviewer` regardless of risk level.
 
