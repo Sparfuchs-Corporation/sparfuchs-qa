@@ -9,6 +9,6 @@
     "outDir": "dist",
     "rootDir": "."
   },
-  "include": ["canaries/**/*.ts", "scripts/**/*.ts", "testing/**/*.ts"],
+  "include": ["canaries/**/*.ts", "scripts/**/*.ts", "testing/**/*.ts", "lib/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

@@ -48,3 +48,110 @@ export interface QaCanaryRun {
   source: 'local' | 'cloud-build' | 'nightly';
   forecastNotes?: string;
 }
+
+// --- Finding persistence types ---
+
+export type FindingSeverity = 'critical' | 'high' | 'medium' | 'low';
+
+export type FindingLifecycle =
+  | 'open'
+  | 'recurring'
+  | 'remediated'
+  | 'verified'
+  | 'closed'
+  | 'wont-fix'
+  | 'stale';
+
+export interface QaFinding {
+  id: string;
+  agent: string;
+  severity: FindingSeverity;
+  category: string;
+  rule: string;
+  file: string;
+  line?: number;
+  title: string;
+  description: string;
+  fix: string;
+  timestamp: string;
+}
+
+export interface FindingRegistryEntry {
+  id: string;
+  lifecycle: FindingLifecycle;
+  firstSeenRunId: string;
+  firstSeenAt: string;
+  lastSeenRunId: string;
+  lastSeenAt: string;
+  remediatedAt?: string;
+  verifiedAt?: string;
+  closedAt?: string;
+  occurrenceCount: number;
+  finding: QaFinding;
+}
+
+// --- Run metadata ---
+
+export interface QaRunMeta {
+  runId: string;
+  projectSlug: string;
+  repoPath: string;
+  branch?: string;
+  commitSha?: string;
+  mode: 'full' | 'tier1' | 'tier2' | 'diff';
+  startedAt: string;
+  completedAt?: string;
+  verdict: 'PASS' | 'NEEDS CHANGES' | 'BLOCKED';
+  agents: string[];
+  stats: {
+    total: number;
+    bySeverity: Record<FindingSeverity, number>;
+    new: number;
+    recurring: number;
+    remediated: number;
+  };
+  previousRunId?: string;
+}
+
+export interface RunDelta {
+  runId: string;
+  previousRunId: string;
+  newFindings: string[];
+  recurringFindings: string[];
+  remediatedFindings: string[];
+  closureRate: number;
+  regressionRate: number;
+}
+
+// --- Evolution ---
+
+export interface EvolutionPattern {
+  rule: string;
+  category: string;
+  totalOccurrences: number;
+  runsAppeared: number;
+  averageSeverity: FindingSeverity;
+  fixRate: number;
+  trend: 'improving' | 'stable' | 'worsening';
+  lastSeen: string;
+}
+
+export interface ProjectConfig {
+  projectSlug: string;
+  displayName: string;
+  repoPath: string;
+  firstReviewedAt: string;
+  lastReviewedAt: string;
+  totalRuns: number;
+}
+
+// --- GCP QA Service ingest contract ---
+
+export interface QaIngestPayload {
+  version: 1;
+  projectSlug: string;
+  run: QaRunMeta;
+  findings: QaFinding[];
+  delta: RunDelta | null;
+  evolution: EvolutionPattern[] | null;
+}

@@ -29,6 +29,7 @@
       "Bash(npm ls *)",
       "Bash(npm audit signatures *)",
       "Bash(node --version)",
+      "Bash(bash scripts/qa-review-remote.sh *)",
       "Bash(find *)",
       "Bash(ls *)",
       "Bash(cat *)",

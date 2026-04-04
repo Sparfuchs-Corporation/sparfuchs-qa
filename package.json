@@ -12,7 +12,12 @@
     "qa:sca": "tsx scripts/package-verify.ts",
     "qa:verify": "tsx scripts/package-verify.ts --dry-run",
     "qa:flaky": "tsx scripts/flaky-test-tracker.ts --report",
-    "qa:flaky-track": "tsx scripts/flaky-test-tracker.ts"
+    "qa:flaky-track": "tsx scripts/flaky-test-tracker.ts",
+    "qa:cred-setup": "tsx lib/credentials/setup-wizard.ts",
+    "qa:delta": "tsx scripts/qa-delta-report.ts",
+    "qa:evolve-v2": "tsx scripts/qa-evolve-v2.ts",
+    "qa:cleanup": "tsx scripts/qa-cleanup.ts",
+    "qa:sync": "tsx scripts/qa-firestore-sync.ts"
   },
   "devDependencies": {
     "tsx": "^4.7.0",

@@ -6,3 +6,7 @@ dist/
 .DS_Store
 CLAUDE.local.md
 qa-reports/
+qa-data/
+
+# Temporary credential files
+**/sparfuchs-qa-creds-*

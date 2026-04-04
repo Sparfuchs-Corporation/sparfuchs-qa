@@ -1,28 +1,40 @@
 ---
 name: qa-review
 description: Full QA review — intake interview, project discovery, risk triage, specialist agent delegation, and dual-file output (session log + report).
-argument-hint: "[--full] [output directory — default: qa-reports/]"
+argument-hint: "[--full | --tier1 | --tier2] [--model-override opus|sonnet|haiku] [output directory — default: qa-reports/]"
 disable-model-invocation: true
 ---
 
-Comprehensive QA review that discovers a project, assesses risk, delegates to specialist agents, and produces exactly two local output files: a structured session log and a final QA report.
+Comprehensive QA review that discovers a project, assesses risk, delegates to specialist agents via a tiered execution pipeline, and produces structured output files.
 
 **CRITICAL RULES**:
-- You must produce EXACTLY 2 output files. No more. All agent output goes inline into these two files.
-- Do NOT create additional files in `qa-reports/` (no raw JSON dumps, no per-agent output files, no intermediate results).
+- Do NOT create additional files in `qa-reports/` beyond the ones specified below (no raw JSON dumps, no per-agent output files, no intermediate results).
 - File names MUST use today's calendar date (the date the review is run), NOT commit dates, analysis timestamps, or git log dates.
-- All raw agent output, execution results, and intermediate data goes into the session log. The report gets the synthesized summary only.
+- **Session log = full debug log.** Think of it as console output at maximum verbosity. Every agent's complete unedited response, every error message, every tool call result, every file read, every search executed. Never summarize or condense anything in the session log. It is the forensic record of exactly what happened during the review.
+- **Report = full findings.** Every individual finding from every agent listed with file:line, description, and fix. Never batch or summarize findings (e.g., "11-15. Minor issues" is forbidden — list each one).
+- You produce EXACTLY 5 output files. No more, no less:
+  1. `{YYYY-MM-DD}_{project-slug}_session-log.md` — full debug log
+  2. `{YYYY-MM-DD}_{project-slug}_qa-report.md` — all findings
+  3. `{YYYY-MM-DD}_{project-slug}_spec-report.md` — functional spec verification (from @spec-verifier)
+  4. `{YYYY-MM-DD}_{project-slug}_qa-gaps.md` — QA coverage gap analysis (from @qa-gap-analyzer)
+  5. `{YYYY-MM-DD}_{project-slug}_remediation-plan.md` — prioritized, phased action plan for fixing findings
 
 ## Step 0: Intake Interview
 
-Before any analysis, gather project metadata using AskUserQuestion. Ask all four in a single prompt:
+Before any analysis, gather project metadata. Check if the user's prompt already contains pre-filled values (the `qa-review-remote.sh` wrapper provides these). If a value is present in the prompt (e.g., "Project name: X", "Initiated by: Y", "Write reports to: Z"), use it as the default. Only use AskUserQuestion for values that are NOT pre-filled. If all four values are provided, skip the interview entirely.
 
-- **Project Name** — display name for reports (e.g., "Sparfuchs", "The Forge")
+Gather these four values:
+
+- **Project Name** — display name for reports (e.g., "Sparfuchs", "The Forge"). If not pre-filled, default to the repo directory name.
 - **Repo Location** — absolute path to the target repository root (default: current working directory)
 - **Web URL** — GitHub/GitLab URL for the project (or "none")
 - **Person Name** — who is initiating this QA review
 
-Parse `$ARGUMENTS` for the output directory. Default to `qa-reports/` at the sparfuchs-qa repo root.
+Also check for a pre-filled credential path:
+
+- **Credentials File** — If the prompt contains "Credentials file: /path", note the path. This means a temporary credentials JSON file was created by the setup wizard (`--auth` flag). Pass this path to generator agents (e2e-tester, crud-tester, contract-reviewer) during Step 5 delegation. **SECURITY: Never log the contents of the credential file to the session log.** Only log that credentials are available and the strategy type (read the `strategy` field from the file via `Bash(cat {path} | grep strategy)`).
+
+Parse `$ARGUMENTS` for the output directory. If the prompt contains "Write reports to: /path/", use that path. Otherwise default to `qa-reports/` at the sparfuchs-qa repo root.
 
 Generate using **today's date** (run `date '+%Y-%m-%d'` via Bash to get it — do NOT use commit dates or git log dates):
 - **Run ID**: `qa-{YYYYMMDD}-{HHmm}-{random 4 hex chars}`
@@ -31,9 +43,35 @@ Generate using **today's date** (run `date '+%Y-%m-%d'` via Bash to get it — d
   - `{output-dir}/{YYYY-MM-DD}_{project-name-slug}_session-log.md`
   - `{output-dir}/{YYYY-MM-DD}_{project-name-slug}_qa-report.md`
 
-These are the ONLY two files you will create. Do not create any other files in the output directory.
-
 Create the output directory if it doesn't exist (use Bash `mkdir -p`).
+
+Also derive a `project-slug` (lowercase, hyphens, no spaces) from the project name. Create the qa-data directory for this project:
+```bash
+mkdir -p qa-data/{project-slug}/runs/{run-id}
+mkdir -p qa-data/{project-slug}/findings
+mkdir -p qa-data/{project-slug}/evolution
+```
+
+Create an empty streaming findings file:
+```bash
+touch qa-data/{project-slug}/runs/{run-id}/findings.jsonl
+```
+
+## Step 0.5: Load Previous Baseline
+
+Check if a previous baseline exists:
+```bash
+test -f qa-data/{project-slug}/current-baseline.json && echo "exists" || echo "none"
+```
+
+**If baseline exists**:
+1. Read `qa-data/{project-slug}/current-baseline.json` — this contains the findings from the last run
+2. Count findings and note the previous run ID (from the file)
+3. Log to session log: `"Previous baseline loaded: {n} findings from run {previous-run-id}"`
+4. Store in memory for delta computation in Step 6.25
+
+**If no baseline exists**:
+- Log: `"No previous baseline found — this is the first tracked run for {project-slug}"`
 
 ## Step 1: Initialize Output Files
 
@@ -96,11 +134,20 @@ Append a `## Discovery` section to the session log using Edit with the full prof
 
 ## Step 3: Determine Review Scope
 
-Check if `$ARGUMENTS` contains `--full`. This determines the review mode:
+Parse `$ARGUMENTS` for execution mode flags. Only one mode flag is allowed:
 
-### Full Repo Audit (`--full` flag present)
+| Flag | Mode | Description |
+|---|---|---|
+| `--full` | Full tiered audit | All 3 tiers against full repo, with tier gating |
+| `--tier1` | Structure & Intent only | Quick structural audit — feature map + intent verification |
+| `--tier2` | Structure + Quality | Tier 1 + code quality/security agents, no test generation |
+| (none) | Diff review | Risk triage picks agents based on what changed |
 
-When `--full` is passed, review ALL source files in the repo — not just a diff. This is a complete project audit.
+Also parse `--model-override {opus|sonnet|haiku}` — if present, ALL agents use this model regardless of their frontmatter `model` field. Log the override to the session log.
+
+### Full Repo Audit (`--full`, `--tier1`, or `--tier2` flag present)
+
+When any tier flag is passed, review ALL source files in the repo — not just a diff. This is a complete project audit.
 
 1. Use Glob to find all source files in the target repo:
    - `**/*.ts`, `**/*.tsx`, `**/*.js`, `**/*.jsx` (excluding `node_modules/`, `dist/`, `.next/`, `build/`)
@@ -108,14 +155,11 @@ When `--full` is passed, review ALL source files in the repo — not just a diff
    - `**/*.go`, `**/*.rs`, `**/*.rb`, `**/*.java` as applicable
    - `**/*.css`, `**/*.scss`, `**/*.html`, `**/*.vue`, `**/*.svelte`
    - `Dockerfile*`, `docker-compose*`, `*.yaml`, `*.yml` (CI/IaC files)
-2. Log scope as: `Full repo audit — {N} source files`
-3. All agents run regardless of risk level (treat as Critical risk)
+2. Log scope as: `{mode} — {N} source files`
+3. Agents are selected by tier (see Step 4), not by risk level
 4. Agents analyze the full file list, not a diff — they read and review every file
-5. Generator agents scan the entire codebase for test generation opportunities
 
-This mode is designed for first-time project onboarding or periodic full audits. It will take significantly longer than a diff review.
-
-### Diff Review (default — no `--full` flag)
+### Diff Review (default — no tier flags)
 
 Review only what changed:
 
@@ -133,11 +177,75 @@ Log the scope decision to the session log under `## Scope`, including:
 - File count or diff stats
 - What triggered this scope (flag, staged, unstaged, last commit, PR number)
 
-## Step 4: Risk Triage
+## Step 4: Risk Triage & Tier Selection
 
-**If `--full` mode**: Skip risk triage. Set risk to CRITICAL (all agents run). Log "Full audit mode — all agents will run" to session log under `## Risk Triage`.
+### Tiered Execution (for `--full`, `--tier1`, `--tier2` modes)
 
-**If diff mode**: Delegate to `@risk-analyzer` with the target repo path and the diff from Step 3. Append the full risk-analyzer output to the session log under `## Risk Triage`.
+When any tier flag is set, agents are grouped into tiers. Each tier runs sequentially — Tier 1 output informs Tier 2, Tier 2 output informs Tier 3.
+
+#### Tier 1: Structure & Intent (always runs first)
+
+Purpose: understand what the project claims to do and whether its structure supports those claims.
+
+| Agent | Purpose |
+|---|---|
+| `@risk-analyzer` | Score overall project risk |
+| `@spec-verifier` | Map every feature — classify as Complete / Stubbed / Shell / Broken |
+| `@ui-intent-verifier` | Read UI labels, verify fulfillment chains, sweep settings pages |
+| `@dead-code-reviewer` | Find orphaned code, empty stubs, unused exports |
+
+**Output**: A feature map showing what's real vs. fake, what's wired vs. decorative. This tells Tier 2 where to focus.
+
+**Gate**: If Tier 1 finds >50% of features are Stubbed or Broken, log a warning: `"⚠ Project is majority non-functional ({n}% stubbed/broken). Tier 2 will focus on the {n} features classified as Complete or Partial."` Tier 2 still runs, but agents are told to skip files in Stubbed/Shell features.
+
+**If `--tier1`**: Stop here. Write the report with Tier 1 findings only, plus the remediation plan.
+
+#### Tier 2: Code Quality & Security (runs against real code)
+
+Purpose: deep analysis of code that's actually wired up and functional.
+
+| Agent | Focus |
+|---|---|
+| `@code-reviewer` | Correctness, logic errors, null safety |
+| `@security-reviewer` | Vulnerabilities, auth, injection |
+| `@performance-reviewer` | Query efficiency, memory, bundle size |
+| `@deploy-readiness-reviewer` | Env vars, missing indexes, config drift, fake data |
+| `@contract-reviewer` | API contract alignment frontend/backend |
+| `@rbac-reviewer` | Auth/role/permission consistency |
+| `@a11y-reviewer` | Accessibility |
+| `@compliance-reviewer` | Data privacy, PII handling |
+
+**Input from Tier 1**: Pass the feature map to each Tier 2 agent with this context: "The following files are in features classified as Stubbed or Shell — skip them, they need rewriting not review: {file list}. Focus on files in features classified as Complete or Partial: {file list}. Pay extra attention to files flagged by @ui-intent-verifier as having unfulfilled intent contracts."
+
+**If `--tier2`**: Stop here. Write the report with Tier 1 + Tier 2 findings, plus the remediation plan.
+
+#### Tier 3: Infrastructure & Test Generation (runs last)
+
+Purpose: generate artifacts and check infrastructure. Only valuable after Tiers 1+2.
+
+| Agent | Focus |
+|---|---|
+| `@iac-reviewer` | Terraform, Docker, CI/CD configs |
+| `@dependency-auditor` | Dependency health |
+| `@sca-reviewer` | Supply chain vulnerabilities |
+| `@crud-tester` | Generate CRUD test scripts |
+| `@e2e-tester` | Generate E2E test specs |
+| `@fixture-generator` | Generate test fixtures |
+| `@api-spec-reviewer` | OpenAPI spec accuracy |
+| `@doc-reviewer` | Documentation quality |
+| `@failure-analyzer` | Test failure analysis (if tests were run) |
+
+**Input from Tier 1+2**: Generator agents use the feature map to only generate tests for functional features. Skip generating E2E tests for Stubbed features.
+
+#### Always-last (runs after all tiers)
+
+| Agent | Purpose |
+|---|---|
+| `@qa-gap-analyzer` | Synthesize all agent output, find coverage gaps |
+
+### Diff Mode (default — no tier flags)
+
+Delegate to `@risk-analyzer` with the target repo path and the diff from Step 3. Append the full risk-analyzer output to the session log under `## Risk Triage`.
 
 Use the overall risk score to determine which agents to invoke:
 
@@ -146,13 +254,17 @@ Use the overall risk score to determine which agents to invoke:
 | **Low** | `@code-reviewer`, `@doc-reviewer` (if docs changed) |
 | **Medium** | Above + `@security-reviewer` (if security-sensitive), `@performance-reviewer` (if perf-sensitive) |
 | **High** | Above + `@sca-reviewer` (if deps changed), `@crud-tester` (if API/DB changed) |
-| **Critical / Full** | All available agents regardless of file type |
+| **Critical** | All available agents regardless of file type |
 
 Always invoke `@code-reviewer` regardless of risk level.
+
+In diff mode, the routing table conditions (next section) still apply — agents are only invoked when their trigger condition matches the changed files.
 
 ## Step 5: Agent Delegation
 
 For each agent selected in Step 4, run it against the target repo. Two agent types:
+
+**CRITICAL RULE: The session log is a FULL DEBUG LOG.** It must capture everything — like console output with full verbosity. Every agent communication, every error, every tool call result, every file that was read, every search that was run. The session log is the forensic record of exactly what happened. Never summarize, condense, or omit output. If an agent returned 500 lines of analysis, all 500 lines go in the session log.
 
 ### Analysis Agents (produce findings only)
 
@@ -160,10 +272,14 @@ For each:
 1. Append `### {Agent Name} — {timestamp}` to session log
 2. Append `Delegating to @{agent-name}...` to session log
 3. Run the agent
-4. Append the agent's full output to the session log
-5. Collect findings (file, line, severity, issue, fix) for the report
+4. Append the agent's **complete, unedited output** to the session log — every finding, every file it examined, every error it hit, every note it made. Do NOT summarize or paraphrase. Copy the full agent response verbatim.
+5. If the agent hit errors or permission issues, log those too with full error messages
+6. Collect findings (file, line, severity, issue, fix) for the report
+7. **Stream findings to JSONL**: Parse `<!-- finding: {...} -->` tags from the agent's output. For each tag found, append the JSON object as a line to `qa-data/{project-slug}/runs/{run-id}/findings.jsonl` via Bash: `echo '{json}' >> qa-data/{project-slug}/runs/{run-id}/findings.jsonl`. Add the `agent` field if not present in the tag.
 
 ### Generator Agents (produce executable scripts)
+
+**Credential pass-through**: If a credentials file path was noted during intake, include it in the delegation prompt to generator agents (`@e2e-tester`, `@crud-tester`, `@contract-reviewer`): "Authenticated testing is available. Read the credential file at {path} using `Bash(cat {path})` and use the `strategy`, `credentials`, `target`, and `metadata` fields to generate test specs with proper authentication setup. Do NOT log the credential values — only log the strategy type."
 
 For each:
 1. Append `### {Agent Name} — {timestamp}` to session log
@@ -174,8 +290,8 @@ For each:
    - Each entry: `{ "file": "{path}", "agent": "{name}", "timestamp": "{ISO}", "targetCommit": "{SHA}" }`
 5. Attempt execution: run `npx tsx {generated-script}` via Bash
    - If external tool not installed (k6, etc.): log `"Script generated but not executed — {tool} not installed"`
-   - If executed: capture stdout/stderr
-6. Append generation summary and execution results (including raw output) **inline to the session log** — do NOT create separate output files
+   - If executed: capture full stdout/stderr
+6. Append **everything** inline to the session log: the agent's full output, the generated script contents, the complete execution output (stdout + stderr), exit codes, and any errors. Do NOT create separate output files and do NOT truncate.
 7. Collect findings from execution results for the report
 
 ### Agent Routing Table
@@ -193,17 +309,59 @@ For each:
 | API route handlers AND client-side fetch/axios calls exist | `@contract-reviewer` | Generator |
 | Route/navigation structure changed | `@e2e-tester` | Generator |
 | Test failures detected during execution | `@failure-analyzer` | Analysis |
+| Data models, user data, PII fields changed | `@compliance-reviewer` | Analysis |
+| Terraform, Docker, CI/CD files changed | `@iac-reviewer` | Analysis |
+| TypeScript type/interface definitions changed | `@fixture-generator` | Generator |
+| Auth, role, permission, guard files changed | `@rbac-reviewer` | Analysis |
+| OpenAPI/Swagger specs OR API route handlers changed | `@api-spec-reviewer` | Analysis |
+| Always (full audit) or repo hygiene concerns | `@dead-code-reviewer` | Analysis |
+| Config files, env vars, database indexes/rules/migrations, CI/CD build configs, or data-handling/workflow logic changed | `@deploy-readiness-reviewer` | Analysis |
+| Frontend files with interactive elements (buttons, forms, toggles, links) changed | `@ui-intent-verifier` | Analysis |
 
-Future agents (Phase 3+):
-- `@compliance-reviewer` — when data models/user data change
-- `@iac-reviewer` — when Terraform/Docker/CI files change
-- `@fixture-generator` — when type definitions change
+### Special Agents (run after all domain agents)
+
+| Condition | Agent | Type |
+|---|---|---|
+| Always (full audit) or page/route/feature files changed | `@spec-verifier` | Analysis — writes `_spec-report.md` |
+| Always — runs LAST | `@qa-gap-analyzer` | Analysis — writes `_qa-gaps.md` |
+
+Future agents (Phase 4+):
+- `@i18n-reviewer` — when locale/translation files change
+- `@migration-reviewer` — when database migration files change
+
+## Step 5.5: Run Spec Verifier
+
+After all domain agents complete (Step 5), run `@spec-verifier`:
+
+1. Delegate to `@spec-verifier` with the target repo path, the run ID, today's date, and the output file path: `{output-dir}/{YYYY-MM-DD}_{project-slug}_spec-report.md`
+2. The agent searches for PRD/spec documents. If found: Mode A (verify). If not: Mode B (reverse-engineer).
+3. It writes the spec report directly to the output file
+4. Append the agent's full verbatim output to the session log under `### Spec Verifier — {timestamp}`
 
 ## Step 6: Write Final Report
+
+**CRITICAL RULE: FULL DETAIL, NEVER SUMMARIZE.** Every single finding from every agent must be listed individually with its file path, line number, full description, and fix. NEVER batch findings like "11-15. Minor issues across X" — each one gets its own numbered line with specifics. The entire point of specialist agents is their detailed analysis. If an agent reported 15 findings, the report lists 15 findings.
 
 Append the full report body to File 2 (`_qa-report.md`) using Edit:
 
 ```markdown
+## Tier Summary
+
+{Include this section when running in tiered mode (--full, --tier1, --tier2). Omit in diff mode.}
+
+### Tier 1: Structure & Intent
+- Features discovered: {n}
+- Complete: {n} | Stubbed: {n} | Shell: {n} | Broken: {n}
+- Decorative settings: {n}/{total}
+- Unfulfilled UI intent contracts: {n}
+
+### Tier 2: Code Quality (applied to {n} complete/partial features)
+- Critical: {n} | High: {n} | Medium: {n} | Low: {n}
+
+### Tier 3: Infrastructure & Tests
+- Test scripts generated: {n}
+- Infra findings: {n}
+
 ## Project Profile
 
 {Discovery summary from Step 2 — tech stack, architecture, test infra, deps, git state, size}
@@ -214,21 +372,46 @@ Append the full report body to File 2 (`_qa-report.md`) using Edit:
 
 {Risk-analyzer summary — change stats, per-file breakdown, risk factors}
 
+## Remediation Status
+
+{Include this section if a previous baseline existed. Omit on first run.}
+
+Compared against run {previous-run-id} ({previous-date}):
+
+| Metric | Count |
+|---|---|
+| New findings | {n} |
+| Recurring (unfixed) | {n} |
+| Remediated since last run | {n} |
+| Closure rate | {n}% |
+
+### Remediated (fixed since last run)
+{Strikethrough each remediated finding: ~~[category] `file:line` — description~~ FIXED}
+
+### New (regressions or newly detected)
+{List each new finding with severity and location}
+
+### Recurring Critical (open for 2+ runs — please prioritize)
+{List findings that have appeared in multiple consecutive runs}
+
 ## Findings
 
+Group by severity. Every finding individually listed — no batching, no summarizing.
+
 ### Critical
-- [{agent}] `{file}:{line}` — {issue}. **Fix**: {suggestion}
+1. [{agent}] `{file}:{line}` — {full description}. **Fix**: {full suggestion}
+2. [{agent}] `{file}:{line}` — {full description}. **Fix**: {full suggestion}
 
 ### High
-- [{agent}] `{file}:{line}` — {issue}. **Fix**: {suggestion}
+3. [{agent}] `{file}:{line}` — {full description}. **Fix**: {full suggestion}
 
 ### Medium
-- [{agent}] `{file}:{line}` — {issue}. **Fix**: {suggestion}
+4. [{agent}] `{file}:{line}` — {full description}. **Fix**: {full suggestion}
 
 ### Low
-- [{agent}] `{file}:{line}` — {issue}. **Fix**: {suggestion}
+5. [{agent}] `{file}:{line}` — {full description}. **Fix**: {full suggestion}
 
-{Omit empty severity sections}
+{Omit empty severity sections. NEVER roll up multiple findings into one line.}
 
 ## Generated Artifacts
 
@@ -264,6 +447,29 @@ Append the full report body to File 2 (`_qa-report.md`) using Edit:
 - Duration: {elapsed time}
 ```
 
+## Step 6.25: Build Findings Index & Delta
+
+After writing the report, process the streamed findings for cross-run tracking:
+
+1. **Read JSONL**: Read `qa-data/{project-slug}/runs/{run-id}/findings.jsonl` via Bash. Each line is a JSON finding object.
+2. **Deduplicate**: If the same finding ID appears multiple times (e.g., from two agents), keep the higher-severity version. Write the deduplicated array to `qa-data/{project-slug}/runs/{run-id}/findings-final.json`.
+3. **Compute delta** (if baseline exists from Step 0.5):
+   - **New findings**: in current but not in baseline
+   - **Recurring findings**: in both current and baseline
+   - **Remediated findings**: in baseline but not in current
+   - Calculate closure rate: `remediated / previous_total * 100`
+   - Write delta to `qa-data/{project-slug}/runs/{run-id}/delta.json`
+4. **Update finding index**: Read `qa-data/{project-slug}/findings/index.json` (create if missing). For each finding:
+   - New → add with lifecycle `open`, `occurrenceCount: 1`
+   - Recurring → increment `occurrenceCount`, update `lastSeenAt`
+   - Remediated → transition lifecycle: `open` → `remediated`, `remediated` → `verified`, `verified` → `closed`
+   - Write updated index back
+5. **Update baseline**: Copy `findings-final.json` to `qa-data/{project-slug}/current-baseline.json`
+6. **Write run metadata**: Write `qa-data/{project-slug}/runs/{run-id}/meta.json` with: runId, projectSlug, branch, commit, mode, agents run, verdict, stats (total, by severity, new/recurring/remediated counts)
+7. **Log delta to session log**: Append a `## Remediation Delta` section with new/recurring/remediated counts and closure rate
+
+If this is the first run (no baseline), skip steps 3-4 and just write the baseline and metadata.
+
 ## Step 7: Finalize Session Log
 
 Append a closing section to the session log using Edit:
@@ -277,16 +483,118 @@ Append a closing section to the session log using Edit:
 - **Total findings**: {n}
 - **Verdict**: {PASS/NEEDS CHANGES/BLOCKED}
 - **Report written to**: {report file path}
+- **Spec report**: {spec report file path}
 - **Session log**: {session log file path}
 - **Duration**: {elapsed time}
 - **Completed**: {ISO timestamp}
 ```
 
-Present both file paths to the user:
+## Step 7.5: Generate Remediation Plan
+
+After writing the report and session log, generate File 5: `{output-dir}/{YYYY-MM-DD}_{project-slug}_remediation-plan.md`
+
+This is a structured, prioritized action plan a developer can take directly into plan mode before coding. It transforms findings into phased work items grouped by dependency order.
+
+### How to generate
+
+1. Read back all findings from the session log and qa-report
+2. Cross-reference with `@spec-verifier` feature map and `@ui-intent-verifier` intent analysis (if they ran)
+3. Group findings by dependency: what must be fixed first for other fixes to be possible
+4. Assign each finding to a phase
+5. For findings where working code exists elsewhere in the repo (detected by spec-verifier's "Backend without frontend" or intent-verifier's "existing implementation" notes), include "Existing code to reuse" references
+
+### Remediation plan format
+
+```markdown
+# Remediation Plan — {Project Name}
+
+**Generated**: {date} | **Run ID**: {run-id} | **Total findings**: {n}
+
+## Executive Summary
+
+{2-3 sentences: project state, most important thing to fix first, rough scope of work ahead}
+
+## Phase 1: Foundation (fix these first — everything else depends on them)
+
+Blocking issues. Other fixes will be wasted effort if these aren't resolved.
+
+### 1.1 {Title} — {Severity}
+- **What's wrong**: {1-2 sentence summary}
+- **Why it blocks**: {what other features/fixes depend on this}
+- **Files to modify**: {file paths with line numbers}
+- **Approach**: {concrete steps — not "fix the bug" but specific guidance like "replace calendarConnectionsService.create() with the OAuth flow from Integrations.tsx:74-90"}
+- **Existing code to reuse**: {reference working implementations found elsewhere in repo, if any}
+- **Acceptance criteria**: {how to verify this is fixed}
+- **Estimated scope**: Small (1-2 files) / Medium (3-5 files) / Large (6+ files)
+
+## Phase 2: Wiring (connect the pieces)
+
+Features that exist but aren't wired up. The code is there, just needs connecting.
+
+### 2.1 {Title}
+- **What exists**: {what's already built and where}
+- **What's missing**: {the connection/glue that's absent}
+- **Files to modify**: ...
+- **Approach**: ...
+- **Acceptance criteria**: ...
+- **Estimated scope**: ...
+
+## Phase 3: Completeness (fill the gaps)
+
+Features that are partially implemented or stubbed. Real work needed, not just wiring.
+
+## Phase 4: Hardening (quality & safety)
+
+Security, performance, accessibility, infrastructure findings. Only worth tackling after Phases 1-3.
+
+## Phase 5: Polish (nice-to-haves)
+
+Low-severity findings, documentation gaps, code style.
+
+## Dependency Graph
+
+{Which items block which — ASCII art or simple notation}
+
+Phase 1.1 (credentials) ──► Phase 1.2 (wire OAuth) ──► Phase 2.1 (calendar sync)
+Phase 1.1 ──► Phase 2.3 (settings persistence)
+
+## Decorative / Non-Functional Features
+
+{Explicit list of features that are 100% theater — developer decides: build for real or remove}
+
+| Feature | Location | Verdict | Recommendation |
+|---|---|---|---|
+| {feature} | {file}:{line} | DECORATIVE | {build for real OR remove and show actual state} |
+```
+
+{Omit empty phases. Every finding from the qa-report must appear in exactly one phase.}
+
+## Step 7.75: Run QA Gap Analyzer
+
+After the session log is finalized, run `@qa-gap-analyzer` as the very last step:
+
+1. Delegate to `@qa-gap-analyzer` with paths to the session log, QA report, spec report, and the target repo path
+2. The agent reads all three files, independently explores the repo, and produces `{output-dir}/{YYYY-MM-DD}_{project-slug}_qa-gaps.md`
+3. Append the gap analyzer's full verbatim output to the session log under `### QA Gap Analyzer — {timestamp}`
+
+## Step 8: Present Results
+
+Present all five file paths and the delta summary to the user:
 
 ```
 QA review complete.
 
-Session log: {session-log path}
-QA report:   {report path}
+Session log:        {session-log path}
+QA report:          {report path}
+Spec report:        {spec-report path}
+Gap analysis:       {qa-gaps path}
+Remediation plan:   {remediation-plan path}
+Findings data:      qa-data/{project-slug}/runs/{run-id}/
+
+{If delta exists:}
+Compared to last run ({previous-run-id}):
+  Fixed:     {remediated count}
+  New:       {new count}
+  Recurring: {recurring count}
+  Closure rate: {n}%
 ```

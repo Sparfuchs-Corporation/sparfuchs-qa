@@ -14,5 +14,21 @@ qa-verify:
 	npx tsx scripts/package-verify.ts --dry-run
 qa-flaky:
 	npx tsx scripts/flaky-test-tracker.ts --report
+qa-review:
+	@bash scripts/qa-review-remote.sh \
+		--repo "$(REPO)" \
+		$(if $(FULL),--full) \
+		$(if $(AUTH),--auth) \
+		$(if $(PROJECT),--project "$(PROJECT)") \
+		$(if $(PERSON),--person "$(PERSON)") \
+		$(if $(URL),--url "$(URL)")
+qa-delta:
+	npx tsx scripts/qa-delta-report.ts --project "$(PROJECT)"
+qa-evolve-v2:
+	npx tsx scripts/qa-evolve-v2.ts --project "$(PROJECT)"
+qa-cleanup:
+	npx tsx scripts/qa-cleanup.ts --project "$(PROJECT)" --keep 10
+qa-sync:
+	npx tsx scripts/qa-firestore-sync.ts --project "$(PROJECT)" --latest
 qa-setup:
 	npm install
