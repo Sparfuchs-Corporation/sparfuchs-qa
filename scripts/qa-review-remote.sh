@@ -17,28 +17,48 @@ REPORTS_DIR="$SPARFUCHS_ROOT/qa-reports"
 
 # Agent filenames we deploy (and clean up by name — never wildcard)
 AGENT_FILES=(
+  # Stage 0: Build & Semantic Safety
+  build-verifier.md
+  semantic-diff-reviewer.md
+  # Stage 1: Risk & Static Quality
   code-reviewer.md
   security-reviewer.md
   performance-reviewer.md
-  doc-reviewer.md
   risk-analyzer.md
-  crud-tester.md
-  sca-reviewer.md
-  a11y-reviewer.md
-  contract-reviewer.md
-  dependency-auditor.md
-  e2e-tester.md
-  failure-analyzer.md
-  compliance-reviewer.md
-  iac-reviewer.md
-  fixture-generator.md
-  rbac-reviewer.md
-  api-spec-reviewer.md
-  dead-code-reviewer.md
+  regression-risk-scorer.md
   deploy-readiness-reviewer.md
-  ui-intent-verifier.md
+  contract-reviewer.md
+  rbac-reviewer.md
+  access-query-validator.md
+  permission-chain-checker.md
+  collection-reference-validator.md
+  role-visibility-matrix.md
+  a11y-reviewer.md
+  compliance-reviewer.md
+  dead-code-reviewer.md
   spec-verifier.md
+  ui-intent-verifier.md
+  # Stage 2: Integrity & Prep
+  schema-migration-reviewer.md
+  mock-integrity-checker.md
+  environment-parity-checker.md
+  iac-reviewer.md
+  dependency-auditor.md
+  sca-reviewer.md
+  api-spec-reviewer.md
+  doc-reviewer.md
+  crud-tester.md
+  e2e-tester.md
+  fixture-generator.md
+  boundary-fuzzer.md
+  # Stage 3: Execution & Live Validation
+  test-runner.md
+  smoke-test-runner.md
+  api-contract-prober.md
+  failure-analyzer.md
+  # Stage 4: Synthesis & Gate
   qa-gap-analyzer.md
+  release-gate-synthesizer.md
 )
 
 # --- Parse arguments ---

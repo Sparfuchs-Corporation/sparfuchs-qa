@@ -34,7 +34,15 @@ ls .claude/agents/   # should list 20 .md agent files
 
 ## Step 2: Choose Your Review Mode
 
-### Option A: Diff Review (fast, targeted)
+### Option A: Build Check Only (fastest, on-demand)
+
+Runs just the build-verifier agent — checks format, lint, typecheck, and build in one pass. Answers "will CI pass?" without a full QA review.
+
+```bash
+make qa-build-check REPO=/path/to/your/project
+```
+
+### Option B: Diff Review (fast, targeted)
 
 Reviews only what changed — staged files, unstaged files, or the last commit. Best for pre-commit or pre-PR checks.
 
@@ -42,7 +50,7 @@ Reviews only what changed — staged files, unstaged files, or the last commit. 
 make qa-review REPO=/path/to/your/project
 ```
 
-### Option B: Full Audit (comprehensive, slower)
+### Option C: Full Audit (comprehensive, slower)
 
 Reviews every source file in the repo. Best for first-time onboarding a project or periodic health checks.
 
@@ -50,7 +58,7 @@ Reviews every source file in the repo. Best for first-time onboarding a project 
 make qa-review REPO=/path/to/your/project FULL=1
 ```
 
-### Option C: Full Audit with Authenticated Testing
+### Option D: Full Audit with Authenticated Testing
 
 Runs the full audit and also sets up test credentials so agents can generate authenticated E2E tests, API tests, and contract tests.
 
@@ -136,6 +144,7 @@ Claude then executes:
 
 | Agent | What It Does |
 |---|---|
+| `build-verifier` | Format, lint, typecheck, build — all errors in one pass |
 | `code-reviewer` | Code quality, naming, complexity |
 | `security-reviewer` | Hardcoded secrets, injection risks, auth issues |
 | `performance-reviewer` | N+1 queries, memory leaks, bundle size |
@@ -250,14 +259,14 @@ The credential file is written to `/tmp/sparfuchs-qa-creds-{runid}.json` with `0
 
 ## Review Mode Comparison
 
-| | Diff Review | Full Audit | Full + Auth |
-|---|---|---|---|
-| **Command** | `make qa-review REPO=...` | `+ FULL=1` | `+ FULL=1 AUTH=1` |
-| **Scope** | Changed files only | All source files | All source files |
-| **Agents** | Risk-based subset | All 20 agents | All 20 + auth-aware generation |
-| **Duration** | 5-15 minutes | 30-60+ minutes | 30-60+ minutes |
-| **Generated tests** | Only if relevant files changed | Full codebase scan | Full scan with login/auth setup |
-| **Best for** | Pre-commit, pre-PR | First-time onboarding, periodic audits | Projects with auth-gated features |
+| | Build Check | Diff Review | Full Audit | Full + Auth |
+|---|---|---|---|---|
+| **Command** | `make qa-build-check REPO=...` | `make qa-review REPO=...` | `+ FULL=1` | `+ FULL=1 AUTH=1` |
+| **Scope** | Build pipeline only | Changed files only | All source files | All source files |
+| **Agents** | `build-verifier` only | Risk-based subset | All 21 agents | All 21 + auth-aware generation |
+| **Duration** | 2-5 minutes | 5-15 minutes | 30-60+ minutes | 30-60+ minutes |
+| **Generated tests** | None | Only if relevant files changed | Full codebase scan | Full scan with login/auth setup |
+| **Best for** | Pre-push "will CI pass?" | Pre-commit, pre-PR | First-time onboarding, periodic audits | Projects with auth-gated features |
 
 ---
 

@@ -181,67 +181,98 @@ Log the scope decision to the session log under `## Scope`, including:
 
 ### Tiered Execution (for `--full`, `--tier1`, `--tier2` modes)
 
-When any tier flag is set, agents are grouped into tiers. Each tier runs sequentially — Tier 1 output informs Tier 2, Tier 2 output informs Tier 3.
+When any tier flag is set, agents are grouped into tiers. Each tier runs sequentially — Tier 0 output informs Tier 1, Tier 1 output informs Tier 2, Tier 2 output informs Tier 3.
 
-#### Tier 1: Structure & Intent (always runs first)
+#### Stage 0: Build & Semantic Safety (always first, < 90s)
 
-Purpose: understand what the project claims to do and whether its structure supports those claims.
+Purpose: catch build failures and semantic-breaking transformations before anything else runs.
+
+| Agent | Purpose |
+|---|---|
+| `@build-verifier` | Run format, lint, typecheck, build — all errors grouped by root cause |
+| `@semantic-diff-reviewer` | Detect automated transformations that change runtime behavior (function→arrow, removed assertions, async changes) |
+
+**Run style**: Sequential (build-verifier first, then semantic-diff-reviewer).
+**Gate**: Must have zero hard blockers to proceed. If the build is broken or a critical semantic issue exists (e.g., arrow function used as constructor), log: `"Stage 0 BLOCKED: {n} hard blockers. Fix before proceeding."` In interactive mode, pause for human remediation. In automated mode, continue with warnings.
+
+#### Stage 1: Risk & Static Quality (parallel, 2-4 min)
+
+Purpose: comprehensive static analysis — risk scoring, code quality, security, and structural review.
 
 | Agent | Purpose |
 |---|---|
 | `@risk-analyzer` | Score overall project risk |
-| `@spec-verifier` | Map every feature — classify as Complete / Stubbed / Shell / Broken |
-| `@ui-intent-verifier` | Read UI labels, verify fulfillment chains, sweep settings pages |
-| `@dead-code-reviewer` | Find orphaned code, empty stubs, unused exports |
-
-**Output**: A feature map showing what's real vs. fake, what's wired vs. decorative. This tells Tier 2 where to focus.
-
-**Gate**: If Tier 1 finds >50% of features are Stubbed or Broken, log a warning: `"⚠ Project is majority non-functional ({n}% stubbed/broken). Tier 2 will focus on the {n} features classified as Complete or Partial."` Tier 2 still runs, but agents are told to skip files in Stubbed/Shell features.
-
-**If `--tier1`**: Stop here. Write the report with Tier 1 findings only, plus the remediation plan.
-
-#### Tier 2: Code Quality & Security (runs against real code)
-
-Purpose: deep analysis of code that's actually wired up and functional.
-
-| Agent | Focus |
-|---|---|
+| `@regression-risk-scorer` | Git history analysis — churn rates, revert frequency, co-change coupling |
 | `@code-reviewer` | Correctness, logic errors, null safety |
 | `@security-reviewer` | Vulnerabilities, auth, injection |
 | `@performance-reviewer` | Query efficiency, memory, bundle size |
 | `@deploy-readiness-reviewer` | Env vars, missing indexes, config drift, fake data |
 | `@contract-reviewer` | API contract alignment frontend/backend |
 | `@rbac-reviewer` | Auth/role/permission consistency |
+| `@access-query-validator` | Access query filtering — admin/manager bypass paths |
+| `@permission-chain-checker` | Access permission lifecycle — reader arrays, role assignment, claims propagation |
+| `@collection-reference-validator` | Collection/table name consistency across rules, services, functions |
+| `@role-visibility-matrix` | Role x module visibility matrix — which roles can see which data |
 | `@a11y-reviewer` | Accessibility |
 | `@compliance-reviewer` | Data privacy, PII handling |
+| `@dead-code-reviewer` | Orphaned code, unused exports |
+| `@spec-verifier` | Features vs PRD/spec — Complete / Stubbed / Shell / Broken |
+| `@ui-intent-verifier` | UI labels vs actual behavior |
 
-**Input from Tier 1**: Pass the feature map to each Tier 2 agent with this context: "The following files are in features classified as Stubbed or Shell — skip them, they need rewriting not review: {file list}. Focus on files in features classified as Complete or Partial: {file list}. Pay extra attention to files flagged by @ui-intent-verifier as having unfulfilled intent contracts."
+**Run style**: All parallel.
+**Gate**: Optional — warnings allowed, critical/high findings logged. If >50% features are Stubbed/Broken, log warning and tell Stage 2 agents to skip those files.
+**If `--tier1`**: Stop here. Write report with Stage 0 + Stage 1 findings.
 
-**If `--tier2`**: Stop here. Write the report with Tier 1 + Tier 2 findings, plus the remediation plan.
+#### Stage 2: Integrity & Prep (parallel, 2-3 min)
 
-#### Tier 3: Infrastructure & Test Generation (runs last)
-
-Purpose: generate artifacts and check infrastructure. Only valuable after Tiers 1+2.
-
-| Agent | Focus |
-|---|---|
-| `@iac-reviewer` | Terraform, Docker, CI/CD configs |
-| `@dependency-auditor` | Dependency health |
-| `@sca-reviewer` | Supply chain vulnerabilities |
-| `@crud-tester` | Generate CRUD test scripts |
-| `@e2e-tester` | Generate E2E test specs |
-| `@fixture-generator` | Generate test fixtures |
-| `@api-spec-reviewer` | OpenAPI spec accuracy |
-| `@doc-reviewer` | Documentation quality |
-| `@failure-analyzer` | Test failure analysis (if tests were run) |
-
-**Input from Tier 1+2**: Generator agents use the feature map to only generate tests for functional features. Skip generating E2E tests for Stubbed features.
-
-#### Always-last (runs after all tiers)
+Purpose: verify mock/env integrity, review infrastructure, generate test scripts for Stage 3.
 
 | Agent | Purpose |
 |---|---|
-| `@qa-gap-analyzer` | Synthesize all agent output, find coverage gaps |
+| `@schema-migration-reviewer` | Compare schema definitions against migrations — catch unmigrated tables |
+| `@mock-integrity-checker` | Validate mocks match real implementation signatures |
+| `@environment-parity-checker` | Env var/config consistency across environments |
+| `@iac-reviewer` | Terraform, Docker, CI/CD configs |
+| `@dependency-auditor` | Dependency health |
+| `@sca-reviewer` | Supply chain vulnerabilities |
+| `@api-spec-reviewer` | OpenAPI spec accuracy |
+| `@doc-reviewer` | Documentation quality |
+| `@crud-tester` | Generate CRUD test scripts |
+| `@e2e-tester` | Generate E2E test specs |
+| `@fixture-generator` | Generate test fixtures |
+| `@boundary-fuzzer` | Generate edge-case fuzz test files (generate only, don't execute yet) |
+
+**Run style**: All parallel.
+**Input from Stage 1**: Generator agents use the feature map to only generate tests for functional features.
+**Gate**: Optional — mock/env drift should be fixed before Stage 3 execution.
+**If `--tier2`**: Stop here. Write report with Stages 0-2 findings.
+
+#### Stage 3: Execution & Live Validation (sequential, 3-5 min)
+
+Purpose: actually RUN tests and probe live APIs. Only valuable after Stages 0-2 pass.
+
+| Agent | Purpose |
+|---|---|
+| `@test-runner` | Execute the project's existing test suite |
+| `@smoke-test-runner` | Critical-path health checks against running environment (requires AUTH) |
+| `@boundary-fuzzer` | Execute the fuzz tests generated in Stage 2 |
+| `@api-contract-prober` | Real HTTP calls to verify API responses match types/specs (requires AUTH) |
+| `@failure-analyzer` | Classify any test failures from the above agents |
+
+**Run style**: Sequential — test-runner first, then smoke, then fuzz execution, then API probing, then failure-analyzer synthesizes all failures.
+**Credential pass-through**: If credentials file was noted during intake, pass the path to `@smoke-test-runner` and `@api-contract-prober`.
+**Gate**: Must have zero critical failures to get "SHIP" verdict from the release gate.
+
+#### Stage 4: Synthesis & Gate (last, < 30s)
+
+Purpose: aggregate all findings into one Go/No-Go decision.
+
+| Agent | Purpose |
+|---|---|
+| `@qa-gap-analyzer` | Coverage gaps across the review — writes `_qa-gaps.md` |
+| `@release-gate-synthesizer` | Aggregates all findings → risk score, confidence, verdict, top 3 actions |
+
+**Run style**: Sequential — gap analyzer first, then release gate synthesizer.
 
 ### Diff Mode (default — no tier flags)
 
@@ -296,9 +327,12 @@ For each:
 
 ### Agent Routing Table
 
-| Condition | Agent | Type |
-|---|---|---|
-| Always | `@code-reviewer` | Analysis |
+| Condition | Agent | Type | Stage |
+|---|---|---|---|
+| Always (Stage 0 — runs before all others) | `@build-verifier` | Analysis | 0 |
+| Always (Stage 0 — after build-verifier) | `@semantic-diff-reviewer` | Analysis | 0 |
+| Always | `@regression-risk-scorer` | Analysis | 1 |
+| Always | `@code-reviewer` | Analysis | 1 |
 | Always (or when deps change) | `@dependency-auditor` | Analysis |
 | Dependency files changed (package.json, lockfile) | `@sca-reviewer` | Analysis |
 | Security-sensitive files (auth, crypto, tokens) | `@security-reviewer` | Analysis |
@@ -313,21 +347,43 @@ For each:
 | Terraform, Docker, CI/CD files changed | `@iac-reviewer` | Analysis |
 | TypeScript type/interface definitions changed | `@fixture-generator` | Generator |
 | Auth, role, permission, guard files changed | `@rbac-reviewer` | Analysis |
+| Auth, role, permission, guard, access-control, policy, scope files changed | `@access-query-validator` | Analysis |
+| Auth, role assignment, claims, user creation, access-builder files changed | `@permission-chain-checker` | Analysis |
+| Collection/table/model references, security rules, or migration files changed | `@collection-reference-validator` | Analysis |
+| Always (full audit) | `@role-visibility-matrix` | Synthesis |
 | OpenAPI/Swagger specs OR API route handlers changed | `@api-spec-reviewer` | Analysis |
 | Always (full audit) or repo hygiene concerns | `@dead-code-reviewer` | Analysis |
 | Config files, env vars, database indexes/rules/migrations, CI/CD build configs, or data-handling/workflow logic changed | `@deploy-readiness-reviewer` | Analysis |
 | Frontend files with interactive elements (buttons, forms, toggles, links) changed | `@ui-intent-verifier` | Analysis |
 
-### Special Agents (run after all domain agents)
+### Stage 2 Agents (Integrity & Prep)
 
-| Condition | Agent | Type |
-|---|---|---|
-| Always (full audit) or page/route/feature files changed | `@spec-verifier` | Analysis — writes `_spec-report.md` |
-| Always — runs LAST | `@qa-gap-analyzer` | Analysis — writes `_qa-gaps.md` |
+| Condition | Agent | Type | Stage |
+|---|---|---|---|
+| Schema, migration, seed, or ORM model files changed (or full audit) | `@schema-migration-reviewer` | Analysis | 2 |
+| Always (test files exist) | `@mock-integrity-checker` | Analysis | 2 |
+| Always (env files exist) | `@environment-parity-checker` | Analysis | 2 |
+| Always | `@boundary-fuzzer` | Generator (Stage 2: generate, Stage 3: execute) | 2/3 |
 
-Future agents (Phase 4+):
+### Stage 3 Agents (Execution & Live Validation)
+
+| Condition | Agent | Type | Stage |
+|---|---|---|---|
+| Always (test suite exists) | `@test-runner` | Execution | 3 |
+| Running environment available (AUTH flag) | `@smoke-test-runner` | Execution | 3 |
+| Running environment + API endpoints found | `@api-contract-prober` | Execution | 3 |
+| Test failures detected in Stage 3 | `@failure-analyzer` | Analysis | 3 |
+
+### Stage 4 Agents (Synthesis & Gate)
+
+| Condition | Agent | Type | Stage |
+|---|---|---|---|
+| Always (full audit) or page/route/feature files changed | `@spec-verifier` | Analysis — writes `_spec-report.md` | 1 |
+| Always | `@qa-gap-analyzer` | Analysis — writes `_qa-gaps.md` | 4 |
+| Always — runs LAST | `@release-gate-synthesizer` | Synthesis — produces verdict + risk score | 4 |
+
+Future agents:
 - `@i18n-reviewer` — when locale/translation files change
-- `@migration-reviewer` — when database migration files change
 
 ## Step 5.5: Run Spec Verifier
 

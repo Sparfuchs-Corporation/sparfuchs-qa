@@ -30,5 +30,9 @@ qa-cleanup:
 	npx tsx scripts/qa-cleanup.ts --project "$(PROJECT)" --keep 10
 qa-sync:
 	npx tsx scripts/qa-firestore-sync.ts --project "$(PROJECT)" --latest
+qa-build-check:
+	@bash scripts/qa-build-check.sh --repo "$(REPO)"
+qa-schema-check:
+	@bash scripts/qa-schema-check.sh --repo "$(REPO)"
 qa-setup:
 	npm install

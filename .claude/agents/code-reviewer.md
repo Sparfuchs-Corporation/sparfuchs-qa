@@ -55,6 +55,16 @@ You are a thorough code reviewer focused on catching real issues, not style nitp
 - Try/catch that's too broad — catching errors from unrelated code
 - Missing error cases: what if the API returns 404? What if the file doesn't exist?
 
+## Silent Failures & Shallow Error Reporting
+
+- API routes returning `200 OK` with empty or partial data instead of a proper error status code — callers can't distinguish "no results" from "something broke"
+- Components rendering empty states or fallback UI without surfacing the underlying error (blank dashboard instead of error message)
+- `catch` blocks that `console.error` but don't re-throw or propagate — the caller never knows something failed
+- `console.error` / `console.warn` as the *only* error reporting path (no monitoring integration, no user-visible feedback)
+- Defensive `?.` or `?? []` that silently masks data that *should* exist — hiding a broken API contract behind an empty render
+- Error boundaries or catch handlers returning generic messages ("Something went wrong") without logging the actual error for debugging
+- Functions that return `null` / `undefined` / empty array on failure instead of throwing, when callers cannot distinguish "no data" from "error"
+
 ## Naming
 
 - Names that lie: `isValid` that returns a string, `getUser` that creates a user
