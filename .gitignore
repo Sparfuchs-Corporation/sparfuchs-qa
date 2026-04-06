@@ -8,5 +8,8 @@ CLAUDE.local.md
 qa-reports/
 qa-data/
 
+# PDFs
+*.pdf
+
 # Temporary credential files
 **/sparfuchs-qa-creds-*
