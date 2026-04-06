@@ -7,6 +7,13 @@ disable-model-invocation: true
 
 Comprehensive QA review that discovers a project, assesses risk, delegates to specialist agents via a tiered execution pipeline, and produces structured output files.
 
+**KNOWN BOUNDARIES (inherent to static analysis — do NOT report these as fixable gaps)**:
+- Runtime behavior (API responses, auth flow execution, focus management) cannot be tested without Stage 3 agents + auth credentials
+- Vendor agreement verification (DPAs, ToS compliance) requires manual legal review
+- Cloud Function performance (cold start, concurrency, cost) requires production monitoring tools
+- Screen reader / assistive technology behavior requires manual testing or Playwright + axe-core
+- Document these as inherent scope boundaries in the gap analysis, not as pipeline defects
+
 **CRITICAL RULES**:
 - Do NOT create additional files in `qa-reports/` beyond the ones specified below (no raw JSON dumps, no per-agent output files, no intermediate results).
 - File names MUST use today's calendar date (the date the review is run), NOT commit dates, analysis timestamps, or git log dates.
@@ -56,6 +63,14 @@ Create an empty streaming findings file:
 ```bash
 touch qa-data/{project-slug}/runs/{run-id}/findings.jsonl
 ```
+
+### Tier Coverage Warning
+
+After determining the execution mode, log a tier coverage note to the session log:
+
+- **`--tier1`**: `"Note: --tier1 runs static analysis only (Stages 0-1, ~21 of 37 agents). Excludes: dependency scanning, IaC review, test execution, live probing. For complete coverage, use --full."`
+- **`--tier2`**: `"Note: --tier2 runs static analysis + integrity checks (Stages 0-2, ~31 of 37 agents). Excludes: test execution, live probing. For test execution, use --full."`
+- **`--full`**: `"Running complete audit (all 4 stages, all 37 agents). Stage 3 live probing requires --auth flag for authenticated testing."`
 
 ## Step 0.5: Load Previous Baseline
 
@@ -132,15 +147,53 @@ Navigate to the target repo (`cd {repo path}` or read files at that path). Explo
 
 Append a `## Discovery` section to the session log using Edit with the full profile.
 
+## Step 2.5: Detect Deployment Scope
+
+For monorepos with multiple apps (detected if `workspaces` exists in root `package.json`, or if multiple directories under `apps/` contain `package.json` or `vite.config.*`), determine which parts are deployed to users vs pre-migration/future code.
+
+**Detection method** (check in order, use all that match):
+
+1. **Firebase hosting config** — read `firebase.json` → `hosting[].source` or `hosting[].public` → identifies which app(s) are deployed to hosting
+2. **Cloud Build targets** — read `cloudbuild.*.yaml` → find build/deploy steps that reference specific app directories
+3. **Module Federation config** — read the shell's `vite.config.ts` → find `remotes` entries in federation config → identifies which MFE apps are currently loaded at runtime
+4. **Fallback** — if none of the above yields a clear answer, ask the user via AskUserQuestion
+
+**User verification** (required — do NOT silently recategorize findings):
+
+Present the detection results to the user via AskUserQuestion:
+```
+Auto-detected deployment scope:
+  Deployed: apps/shell, libs/*, functions/, firestore/
+  MFE pending: apps/crm, apps/tools, apps/marketing, apps/hr, apps/service, apps/admin
+
+Findings in MFE-pending directories will be grouped separately (not demoted — severity preserved).
+Stubs in deployed directories (apps/shell) remain at full severity.
+
+Is this correct? If any MFE app is actually deployed or has real stubs that need fixing, let me know.
+```
+
+The user must confirm before any finding is recategorized. This prevents accidentally hiding real stubs as "future MFE code."
+
+**Output**: Store `deployedPaths` and `mfePendingPaths` lists for use in Step 5 (finding tagging) and Step 6 (report grouping). Shared infrastructure paths (`libs/`, `functions/`, `firestore/`) are always classified as `deployed`.
+
+Log to session log under `## Deployment Scope`:
+```
+Deployed (affecting users): {user-confirmed list}
+MFE pending (not yet federated): {user-confirmed list}
+Detection method: {method} + user confirmation
+```
+
+For single-app repos (no workspaces, no `apps/` directory), skip this step entirely — all findings are deployed.
+
 ## Step 3: Determine Review Scope
 
 Parse `$ARGUMENTS` for execution mode flags. Only one mode flag is allowed:
 
 | Flag | Mode | Description |
 |---|---|---|
-| `--full` | Full tiered audit | All 3 tiers against full repo, with tier gating |
-| `--tier1` | Structure & Intent only | Quick structural audit — feature map + intent verification |
-| `--tier2` | Structure + Quality | Tier 1 + code quality/security agents, no test generation |
+| `--full` | Complete Audit | All 4 stages including test execution, smoke testing, API probing, and live validation. Requires `--auth` for Stage 3 live probing. |
+| `--tier1` | Static Analysis | Stage 0-1: build check + 17+ analysis agents (code, security, RBAC, RLAC, perf, a11y, compliance, deploy, spec, intent). **Excludes**: dependency scanning, test execution, live probing, IaC review. |
+| `--tier2` | Static + Integrity | Stage 0-2: Tier 1 + dependency audit, SCA, IaC review, schema-migration, mock-integrity, env-parity, boundary fuzzing, test generation. **Excludes**: test execution, live probing. |
 | (none) | Diff review | Risk triage picks agents based on what changed |
 
 Also parse `--model-override {opus|sonnet|haiku}` — if present, ALL agents use this model regardless of their frontmatter `model` field. Log the override to the session log.
@@ -291,6 +344,39 @@ Always invoke `@code-reviewer` regardless of risk level.
 
 In diff mode, the routing table conditions (next section) still apply — agents are only invoked when their trigger condition matches the changed files.
 
+## Step 4.5: Large Codebase Chunking
+
+If the target repo has **>50 source files** (determined during Discovery in Step 2), split work for general-purpose analysis agents to ensure full file coverage:
+
+1. **Collect all source file paths** from the Glob in Step 3
+2. **Split into chunks of ~25 files each**, grouping by directory to keep related files together:
+   - Sort files by directory path
+   - Create chunks where each chunk contains files from adjacent directories
+   - Each chunk should be 20-30 files (never exceed 35)
+3. **Chunked agents** — launch N parallel instances where N = ceil(total_files / 25):
+   - `@code-reviewer` — general code quality needs to read every file
+   - `@security-reviewer` — security patterns can exist in any file
+   - `@performance-reviewer` — performance issues can exist in any file
+   - `@a11y-reviewer` — only frontend files, so chunk count may be lower
+   - Each instance receives its chunk as an explicit file list in the prompt: `"Review ONLY these files: {file1}, {file2}, ..."`
+   - Name each instance with a suffix: `code-reviewer-chunk-1`, `code-reviewer-chunk-2`, etc.
+   - After all chunks complete, merge findings (deduplicate by file:line)
+4. **Unchunked agents** — these grep/glob for specific patterns and self-scope. Run once against full repo:
+   - `@access-query-validator`, `@permission-chain-checker`, `@collection-reference-validator`, `@role-visibility-matrix`
+   - `@rbac-reviewer`, `@deploy-readiness-reviewer`, `@spec-verifier`, `@ui-intent-verifier`
+   - `@compliance-reviewer`, `@contract-reviewer`, `@dead-code-reviewer`, `@semantic-diff-reviewer`
+   - `@build-verifier`, `@risk-analyzer`, `@regression-risk-scorer`
+5. **Log the chunking decision** to the session log under `## Chunking`:
+   ```
+   Source files: {n}
+   Chunk size: 25
+   Chunks: {n}
+   Chunked agents: code-reviewer ({n} instances), security-reviewer ({n}), performance-reviewer ({n}), a11y-reviewer ({n})
+   Unchunked agents: {comma-separated list}
+   ```
+
+If the repo has ≤50 source files, skip chunking — run all agents once against the full repo.
+
 ## Step 5: Agent Delegation
 
 For each agent selected in Step 4, run it against the target repo. Two agent types:
@@ -307,6 +393,20 @@ For each:
 5. If the agent hit errors or permission issues, log those too with full error messages
 6. Collect findings (file, line, severity, issue, fix) for the report
 7. **Stream findings to JSONL**: Parse `<!-- finding: {...} -->` tags from the agent's output. For each tag found, append the JSON object as a line to `qa-data/{project-slug}/runs/{run-id}/findings.jsonl` via Bash: `echo '{json}' >> qa-data/{project-slug}/runs/{run-id}/findings.jsonl`. Add the `agent` field if not present in the tag.
+8. **Tag deployment scope**: If Step 2.5 detected deployment scope, add a `scope` field to each finding based on the file path: `"deployed"` if the file is in a deployed directory, `"mfe-pending"` if in an MFE-pending directory. Files in `libs/`, `functions/`, `firestore/` are always `"deployed"`.
+
+### Coverage Enforcement (after all chunked agents complete)
+
+**Target: 98% file coverage.** After all chunk instances of a chunked agent complete:
+
+1. Collect the list of files each chunk instance actually read (from the agent's output — look for file paths in Read tool calls or grep results)
+2. Compare against the assigned file list
+3. If coverage < 98%:
+   - Log: `"COVERAGE GAP: {agent} read {n}/{total} files ({pct}%). Missing: {file list}"`
+   - Re-run the agent with ONLY the missed files as a follow-up chunk
+   - Merge follow-up findings with original findings
+   - Repeat until 98% reached or 3 retries exhausted
+4. Log final coverage per agent to session log under `## File Coverage Matrix`
 
 ### Generator Agents (produce executable scripts)
 
@@ -418,6 +518,62 @@ Append the full report body to File 2 (`_qa-report.md`) using Edit:
 - Test scripts generated: {n}
 - Infra findings: {n}
 
+## Coverage Scope
+
+**Mode**: {--tier1 / --tier2 / --full} | **Stages executed**: {0-1 / 0-2 / 0-4} | **Agents run**: {n} of 37
+
+{If chunking was used:}
+**Large codebase chunking**: {n} source files split into {n} chunks of ~25. Chunked agents ran {n} parallel instances each.
+
+### File Coverage Matrix
+
+{Include this if chunking was used (Step 4.5). Shows per-agent file coverage.}
+
+| Agent | Files Assigned | Files Read | Coverage | Status |
+|---|---|---|---|---|
+| code-reviewer ({n} chunks) | {n} | {n} | {pct}% | PASS/RETRY |
+| security-reviewer ({n} chunks) | {n} | {n} | {pct}% | PASS/RETRY |
+| performance-reviewer ({n} chunks) | {n} | {n} | {pct}% | PASS/RETRY |
+| a11y-reviewer ({n} chunks) | {n} | {n} | {pct}% | PASS/RETRY |
+
+**Overall file coverage**: {pct}% (target: 98%)
+**Unreviewed files**: {list, or "none"}
+
+### Skipped agents (not in scope for this tier)
+
+{Generate this table based on the tier. List every agent that was NOT invoked, with the tier flag needed to enable it. Omit rows for agents that DID run.}
+
+| Check | Stage | Agent | Enable with |
+|---|---|---|---|
+| Dependency vulnerabilities | 2 | sca-reviewer | --tier2 or --full |
+| Package health & currency | 2 | dependency-auditor | --tier2 or --full |
+| Infrastructure-as-code | 2 | iac-reviewer | --tier2 or --full |
+| Schema vs migration drift | 2 | schema-migration-reviewer | --tier2 or --full |
+| Mock/real implementation sync | 2 | mock-integrity-checker | --tier2 or --full |
+| Environment config parity | 2 | environment-parity-checker | --tier2 or --full |
+| Edge-case input fuzzing | 2/3 | boundary-fuzzer | --tier2 or --full |
+| Test suite execution | 3 | test-runner | --full |
+| Critical-path smoke tests | 3 | smoke-test-runner | --full + --auth |
+| Live API response validation | 3 | api-contract-prober | --full + --auth |
+| Test failure classification | 3 | failure-analyzer | --full |
+
+### Inherent limitations (not addressable by any tier)
+
+- Runtime behavior (API responses, auth flow execution, focus management) requires live probing (--full + --auth) or manual testing
+- Vendor agreement verification (DPAs, ToS compliance with Gemini, SendGrid, etc.) requires manual legal review
+- Cloud Function performance (cold start, concurrency, cost) requires production monitoring tools
+- Screen reader / assistive technology behavior requires manual testing or Playwright + axe-core
+
+## Deployment Scope
+
+{Include this section if Step 2.5 detected a monorepo with deployed vs MFE-pending directories. Omit for single-app repos.}
+
+**Deployed (affecting users now)**: {n} findings across {file count} files in {directory list}
+**MFE pending (pre-migration, not user-facing)**: {n} findings across {file count} files in {directory list}
+**Detection method**: {method} + user confirmation
+
+{Findings below are split: deployed findings at original severity first, then MFE-pending findings grouped separately with preserved severity labels.}
+
 ## Project Profile
 
 {Discovery summary from Step 2 — tech stack, architecture, test infra, deps, git state, size}
@@ -450,7 +606,9 @@ Compared against run {previous-run-id} ({previous-date}):
 ### Recurring Critical (open for 2+ runs — please prioritize)
 {List findings that have appeared in multiple consecutive runs}
 
-## Findings
+## Findings — Deployed Code
+
+{If Step 2.5 detected a monorepo with deployment scope, show deployed findings first. For single-app repos, use this section for all findings.}
 
 Group by severity. Every finding individually listed — no batching, no summarizing.
 
@@ -468,6 +626,20 @@ Group by severity. Every finding individually listed — no batching, no summari
 5. [{agent}] `{file}:{line}` — {full description}. **Fix**: {full suggestion}
 
 {Omit empty severity sections. NEVER roll up multiple findings into one line.}
+
+## Findings — MFE Pending (not yet deployed to users)
+
+{Include this section only if Step 2.5 detected MFE-pending directories and the user confirmed them. Omit for single-app repos.}
+
+{These findings will become actionable when the MFE app is federated. Grouped separately but severity preserved — "Would be Critical" means it IS critical once deployed. This ensures nothing is hidden during the migration period.}
+
+### Would be Critical (when deployed)
+1. [{agent}] `{file}:{line}` — {description}. **Affects**: {app name}
+
+### Would be High (when deployed)
+2. [{agent}] `{file}:{line}` — {description}. **Affects**: {app name}
+
+{Omit empty severity sections.}
 
 ## Generated Artifacts
 
@@ -536,13 +708,21 @@ Append a closing section to the session log using Edit:
 ## Session Complete
 
 - **Agents run**: {comma-separated list}
-- **Total findings**: {n}
+- **Total findings**: {n} ({n} deployed, {n} MFE-pending)
+- **File coverage**: {pct}% (target: 98%)
 - **Verdict**: {PASS/NEEDS CHANGES/BLOCKED}
 - **Report written to**: {report file path}
 - **Spec report**: {spec report file path}
 - **Session log**: {session log file path}
 - **Duration**: {elapsed time}
 - **Completed**: {ISO timestamp}
+
+{If not --full:}
+- **Coverage note**: {n} of 37 agents ran (Stages {stages}). Skipped: {comma-separated category names}.
+  Run `--tier2` for integrity checks or `--full` for complete coverage including test execution.
+
+{If deployment scope was detected:}
+- **Deployment scope**: {n} findings in deployed code, {n} in MFE-pending code
 ```
 
 ## Step 7.5: Generate Remediation Plan
@@ -653,4 +833,14 @@ Compared to last run ({previous-run-id}):
   New:       {new count}
   Recurring: {recurring count}
   Closure rate: {n}%
+
+{If deployment scope detected:}
+Deployment scope:
+  Deployed findings:    {n} (affecting users now)
+  MFE-pending findings: {n} (not yet deployed)
+
+{If not --full:}
+Coverage: {n} of 37 agents ran (Stages {stages}). File coverage: {pct}%.
+Skipped: {comma-separated skipped categories}.
+Run `--tier2` for integrity checks or `--full` for test execution + live probing.
 ```
