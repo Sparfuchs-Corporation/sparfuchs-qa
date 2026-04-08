@@ -152,17 +152,17 @@ async function generateReport(): Promise<void> {
     .limit(50)
     .get();
 
-  const records = snapshot.docs.map(d => ({ id: d.id, ...d.data() as FlakyRecord }));
+  const records = snapshot.docs.map((d: FirebaseFirestore.QueryDocumentSnapshot) => ({ id: d.id, ...d.data() as FlakyRecord }));
 
-  const confirmed = records.filter(r => r.status === 'confirmed');
-  const candidates = records.filter(r => r.status === 'candidate');
+  const confirmed = records.filter((r: FlakyRecord & { id: string }) => r.status === 'confirmed');
+  const candidates = records.filter((r: FlakyRecord & { id: string }) => r.status === 'candidate');
 
   console.log(JSON.stringify({
     total: records.length,
     confirmed: confirmed.length,
     candidates: candidates.length,
-    quarantined: records.filter(r => r.quarantined).length,
-    tests: records.map(r => ({
+    quarantined: records.filter((r: FlakyRecord & { id: string }) => r.quarantined).length,
+    tests: records.map((r: FlakyRecord & { id: string }) => ({
       name: r.testName,
       file: r.testFile,
       status: r.status,

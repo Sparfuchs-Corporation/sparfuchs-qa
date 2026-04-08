@@ -20,6 +20,8 @@
     "qa:sync": "tsx scripts/qa-firestore-sync.ts"
   },
   "devDependencies": {
+    "@types/node": "^25.5.2",
+    "firebase-admin": "^13.7.0",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0"
   },

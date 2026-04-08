@@ -193,6 +193,75 @@ For each scope, check: is there an `unscoped`, `withoutGlobalScope()`, or equiva
 
 ---
 
+## User-Owned & User-Sourced Data Checks (run ALWAYS alongside RLAC/RBAC checks)
+
+Not all data is org-owned with RLAC. The codebase has three ownership tiers:
+
+| Tier | Examples | Who reads | Who edits |
+|---|---|---|---|
+| **Org-owned (RLAC)** | CRM accounts, leads, opportunities | `_allReaders` array | `_allWriters` array |
+| **User-sourced, org-context** | Synced emails, calendar events, meeting transcripts | Owner + anyone with RLAC on the linked CRM record + managers | Read-only after sync |
+| **User-owned config** | Calendar connections (OAuth), email drafts, preferences, assistant messages | Owner only (managers see status, not credentials) | Owner only |
+
+### Check U1: Detect user-owned config collections
+
+```bash
+grep -rn "userId\|ownerId\|createdBy\|user_id" --include="*.ts" --include="*.tsx" --include="*.js" -l | grep -i "service\|store\|hook"
+```
+
+For each service file found, check if it has BOTH:
+- An unscoped `.list(orgId)` method (returns ALL users' records)
+- A user-scoped `.listByUser(orgId, userId)` or `.listForUser(orgId, userId)` method
+
+**Bug pattern:** A page component calls `.list(orgId)` when `.listByUser(orgId, userId)` exists and should be used. The user sees every other user's data.
+
+Known user-owned config collections to explicitly check:
+- `calendar_connections` — OAuth tokens, connected providers. Must filter by userId.
+- `email_drafts` — personal email drafts. Must filter by userId.
+- `user_preferences` — notification prefs, UI settings. Must filter by userId.
+- `assistant_messages` — AI conversation history. Must filter by userId.
+- `search_history` — personal search log. Must filter by userId.
+
+### Check U2: Trace page-to-service calls for user-owned data
+
+For each user-owned config collection found:
+
+1. Find pages that import the service:
+```bash
+grep -rn "calendarConnectionsService\|calendarSyncService\|emailDraftsService\|preferencesService\|assistantService" --include="*.tsx" --include="*.ts" -l | grep -v "\.service\."
+```
+
+2. Read each page. Check whether it calls:
+   - `.list(orgId)` — **BUG**: returns all users' data
+   - `.listByUser(orgId, userId)` — **CORRECT**: returns only current user's data
+   - `.get(orgId, id)` without checking `result.userId === currentUser.uid` — **BUG**: can read other users' records by ID
+
+### Check U3: Firestore rules for user-owned collections
+
+For each user-owned config collection, read the matching Firestore rule. Check:
+
+1. **Write rules** must enforce `request.auth.uid == resource.data.userId` (or `request.resource.data.userId == request.auth.uid` for create)
+2. **Read rules** — two acceptable patterns:
+   - Strict: `request.auth.uid == resource.data.userId` (owner only)
+   - Manager visibility: `request.auth.uid == resource.data.userId || isManagerOf(resource.data.userId)` with sensitive fields excluded from the manager view
+3. **Flag**: Any read rule that only checks `isOrgMember(orgId)` on a user-owned collection — this exposes all users' config data to any org member
+
+### Check U4: User-sourced org-context data
+
+For collections like synced emails, calendar events, and meeting transcripts:
+
+1. Check if the page offers TWO views:
+   - "My items" view — should filter by `where('userId', '==', currentUser.uid)`
+   - "Items on this record" view (e.g., emails on a deal) — should be accessible if the user has RLAC access to the parent CRM record
+
+2. **Bug pattern:** A "My Emails" page calls `.list(orgId)` instead of `.listByUser(orgId, userId)`, showing every user's synced emails.
+
+3. **Bug pattern:** An opportunity detail page shows ALL synced emails in the org instead of only those linked to this opportunity via `where('linkedRecordId', '==', opportunityId)`.
+
+4. **Correct pattern for managers:** A manager should see their direct reports' synced emails on CRM records they have RLAC access to — not via the "My Emails" view, but via the CRM record view where RLAC on the parent record provides access.
+
+---
+
 ## Rules-Only Checks (run if Rules-only confidence >= MEDIUM)
 
 ### Check 12: Firestore rules role hierarchy
