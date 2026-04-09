@@ -120,6 +120,83 @@ grep -rn "managerReaders" --include="*.ts" --include="*.tsx" --include="*.js"
 
 If the codebase uses `_allReaders` (a union array) for all queries, verify that `managerReaders` values are included in `_allReaders` when records are created/updated. If manager IDs aren't in `_allReaders`, managers won't see their reports' records.
 
+### Check 4b: Identity assumption validation — do stored IDs match the enforcement layer?
+
+For every `_access` query found in Check 1, verify that the identity value being compared is the correct type.
+
+**Step 1 — Trace the userId passed to RLAC queries:**
+
+For each query like `.where('_access._allReaders', 'array-contains', userId)`:
+1. Trace `userId` back to its source. Is it:
+   - `auth.currentUser.uid` (Firebase Auth UID) — CORRECT for rules enforcement
+   - `memberDoc.id` (Firestore doc ID) — WRONG if member docs use auto-generated IDs
+   - `user.id` from app state — TRACE to determine which ID this is
+
+```bash
+grep -rn "currentUser\.uid\|auth\.uid\|user\.uid\|authUser\.uid" --include="*.ts" --include="*.tsx" --include="*.js" | grep -v "node_modules"
+grep -rn "member\.id\|memberDoc\.id\|memberProfile\.id\|profile\.id" --include="*.ts" --include="*.tsx" --include="*.js" | grep -v "node_modules"
+```
+
+**Bug pattern:** The query passes `currentUser.uid` (Auth UID) to the `array-contains` filter, but `_allReaders` was populated with Firestore doc IDs (from `addDoc()`). The query returns zero results even though the user should have access.
+
+**Bug pattern (inverse):** The query passes `memberDoc.id` (Firestore doc ID) to the filter, but security rules check `request.auth.uid`. The query returns results, but Firestore security rules deny the read.
+
+**Step 2 — Detect dual-ID confusion in the codebase:**
+
+```bash
+grep -rn "const userId = .*\.id\b" --include="*.ts" --include="*.tsx" --include="*.js" | grep -v "auth\|uid\|Auth\|node_modules"
+```
+
+Look for variables named `userId` that actually hold doc IDs. If the codebase uses `userId` inconsistently (sometimes Auth UID, sometimes doc ID), flag as HIGH with tag `rlac-dual-id-confusion`.
+
+**Step 3 — Validate the security rules comparison target:**
+
+Read `firestore.rules` (or find it). For each `request.auth.uid` comparison:
+1. What field is it compared against?
+2. Is that field populated with Auth UIDs or doc IDs?
+3. Is there an intermediate mapping?
+
+**The fundamental invariant**: Every value in `_allReaders`, `_allWriters`, `managerId`, `ownerId`, and any field compared against `request.auth.uid` MUST be a Firebase Auth UID, not a Firestore document ID. If any code path populates these fields with document IDs, the entire RLAC system is broken for users whose doc ID differs from their Auth UID.
+
+### Check 4c: Ownership authority completeness
+
+Evaluate whether the system has a single source of truth for identity, ownership, and lifecycle.
+
+**Step 1 — Find identity/ownership registry:**
+
+```bash
+grep -rn "identityRegistr\|identities\|ownershipIndex\|userRegistr\|identity_registry" --include="*.ts" --include="*.js" --include="*.rules" | grep -v "node_modules\|\.test\."
+```
+
+**Step 2 — If registry exists, validate:**
+- Does it cover all RLAC collections? (Can answer "all records owned by user X" in one query?)
+- Is it kept in sync with `_access.ownerId` changes?
+- Does it have lifecycle status tracking (active/departing/departed)?
+- Can it support inheritance (manager receives ownership on departure)?
+
+**Step 3 — If no registry exists:**
+- Can you determine "all records owned by user X" without scanning every collection? Check for: indexed `ownerId` queries, denormalized ownership lists, or a centralized user-records mapping.
+- If the only way to find all owned records is to scan every RLAC collection, flag as HIGH with tag `rlac-no-ownership-authority`:
+  > Departures and transfers require full collection scans (O(N*M) across N collections and M records). No centralized ownership authority exists.
+
+**Step 4 — Check departure/offboarding paths:**
+
+```bash
+grep -rn "depart\|offboard\|deactivate.*user\|removeUser\|disableUser\|terminateUser" --include="*.ts" --include="*.js" | grep -v "node_modules\|\.test\."
+```
+
+Does a departure flow exist? Does it: transfer ownership? Add transition grants? Clean up access arrays? Have a scheduled cleanup?
+
+**Step 5 — Produce remediation guidance (if no ownership authority):**
+
+The finding should recommend building an identity and ownership authority with:
+- User ↔ Auth UID mapping (resolves doc ID mismatch permanently)
+- Ownership index per user (which records across which collections)
+- Status lifecycle (provisioned → active → departing → departed → erased)
+- Inheritance rules (manager inherits on departure)
+- Transition grants (time-limited read access during handover period)
+- Access footprint (count of records referencing this user in `_allReaders`/`_allWriters`)
+
 ---
 
 ## RBAC Checks (run if RBAC confidence >= MEDIUM)

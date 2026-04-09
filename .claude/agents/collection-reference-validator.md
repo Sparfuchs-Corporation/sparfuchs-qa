@@ -92,6 +92,28 @@ Build a master table:
 |---|---|---|---|---|
 | opportunities | Y/N | Y/N | Y/N | Y/N |
 
+**Source 5 — Document ID generation method (identity-sensitive collections only):**
+
+For collections that store user/member profiles or contain `_access` fields:
+
+```bash
+grep -rn "addDoc\|\.add(" --include="*.ts" --include="*.js" | grep -v "node_modules\|\.test\.\|\.spec\."
+grep -rn "setDoc\|doc(.*,.*,.*)" --include="*.ts" --include="*.js" | grep -v "node_modules\|\.test\.\|\.spec\."
+```
+
+For each member/user/profile collection, record:
+- **addDoc / .add()** = auto-generated ID (NOT tied to Auth UID) — DANGEROUS for identity-sensitive collections
+- **setDoc with auth.uid** = ID is Auth UID (SAFE)
+- **setDoc with other ID** = trace the source
+
+Add to the master table:
+
+| Collection Name | Rules | Services | Cloud Functions | Frontend | **ID Method** |
+|---|---|---|---|---|---|
+| members | Y/N | Y/N | Y/N | Y/N | addDoc (AUTO) / setDoc(authUid) |
+
+**Bug pattern:** A `members` collection uses `addDoc()` (auto-generated IDs) but the `_access._allReaders` arrays on CRM records contain member doc IDs. Security rules check `request.auth.uid`, which is the Firebase Auth UID, not the member doc ID.
+
 ### Check 2: Find mismatches across sources
 
 For each collection in the master table:
@@ -99,6 +121,33 @@ For each collection in the master table:
 - Flag string similarity matches that suggest a rename was missed (e.g., "deals" in functions but "opportunities" everywhere else)
 
 **Bug pattern:** Collection "deals" in Cloud Function code but "opportunities" in rules, services, and frontend — suggests a rename that wasn't applied to the function.
+
+### Check 2b: Identity-sensitive field cross-reference
+
+For collections where the doc ID represents a user identity (members, users, profiles):
+- If the ID method is `addDoc` (auto-generated), AND any other collection stores that doc ID in `_access` arrays, `managerId`, `ownerId`, or any field compared against `request.auth.uid` in security rules — flag as CRITICAL with tag `collection-identity-method-mismatch`:
+  > Collection '{name}' uses `addDoc()` but its doc IDs appear in `_access` arrays on other collections. These IDs will never match `request.auth.uid`. The entire RLAC access model is broken for users whose member doc was created via directory import.
+- If reconciliation exists (a function that maps doc IDs to Auth UIDs), note it but still flag as HIGH — reconciliation introduces timing gaps where access is broken.
+
+### Check 2c: Dataset ownership map
+
+For each RLAC-enabled collection (collections with `_access` field):
+1. **Who creates records**: Which services/Cloud Functions call `create()` or `addDoc()` on this collection? What roles can trigger creation?
+2. **How is `ownerId` set**: Is it from `auth.currentUser.uid`? From a member doc ID? From a request body field?
+3. **Can ownership be transferred**: Does a `transferOwnership()` or equivalent exist for this collection?
+4. **Departure handling**: What happens to records in this collection when the owner departs? Are they transferred? Orphaned? Deleted?
+
+Produce a summary table:
+
+```
+| Collection | Creator | ownerId Source | Transfer Path | Departure Handling |
+|---|---|---|---|---|
+| accounts | frontend + API | auth.uid | transferOwnership() | transferred to manager |
+| contacts | frontend | auth.uid | none | ORPHANED |
+```
+
+If any collection shows "ORPHANED" or "none" for departure handling, flag as HIGH with tag `collection-no-departure-handling`:
+> Collection '{name}' has no departure handling. When a user leaves, their records in this collection become invisible (owned by a deactivated user with no reader/writer access for anyone else).
 
 ### Check 3: Find collection name lists in Cloud Functions
 

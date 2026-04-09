@@ -137,6 +137,130 @@ Read the Cloud Function body and check:
 2. Does the list of collections match the canonical set of `_access`-enabled collections?
 3. Are the collection names correct (not using old/renamed names)?
 
+### Check 5b: Identity value origin — doc ID vs Auth UID
+
+Trace where user identity values originate and whether they match the Auth UID that security rules enforce against. This catches the critical class of bug where doc IDs are auto-generated but used as if they were Auth UIDs.
+
+**Step 1 — Find member/user document creation patterns:**
+
+```bash
+grep -rn "addDoc\|\.add(" --include="*.ts" --include="*.js" | grep -v "node_modules\|\.test\.\|\.spec\."
+grep -rn "setDoc\|\.set(" --include="*.ts" --include="*.js" | grep -v "node_modules\|\.test\.\|\.spec\."
+```
+
+For each member/user/profile document creation, classify:
+
+| Pattern | Risk | Rationale |
+|---|---|---|
+| `setDoc(doc(db, 'members', authUser.uid), ...)` | SAFE | doc ID === Auth UID |
+| `addDoc(collection(db, 'members'), ...)` | DANGEROUS | doc ID is auto-generated, never matches Auth UID |
+| `setDoc(doc(db, 'members', someOtherId), ...)` | TRACE | verify `someOtherId` is the Auth UID |
+| `create<MemberProfile>(collectionPath, data)` (wrapper for addDoc) | DANGEROUS | wrapper still uses addDoc internally |
+
+**Bug pattern:** Member documents created via `addDoc()` or via directory import with auto-generated IDs. The doc ID will never equal the user's Firebase Auth UID. Every `_access` array populated with this doc ID is broken.
+
+**Step 2 — Trace what values go into `_allReaders` and `managerId`:**
+
+For each access builder function found in Check 1, trace the `userId` or `ownerId` parameter back to its origin:
+
+```bash
+grep -rn "managerId\|ownerId\|userId\|createdBy" --include="*.ts" --include="*.js" | grep -v "node_modules\|\.test\." | grep -i "member\|profile\|user"
+```
+
+Check specifically:
+1. Is `managerId` set to the *doc ID* of the manager's member document (`managerDoc.id`), or to the manager's *Auth UID*?
+2. When `_allReaders` is populated via `buildDefaultAccess()` or similar, are the IDs doc references or Auth UIDs?
+3. When `managerChain` is computed, does it walk doc IDs or Auth UIDs?
+
+**Bug pattern:** `managerId: managerDoc.id` where `managerDoc` was created with `addDoc()`. The `managerId` is an auto-generated doc ID, not the manager's Auth UID. Security rules checking `request.auth.uid in _allReaders` will never match.
+
+**Step 3 — Check for reconciliation mechanisms:**
+
+```bash
+grep -rn "reconcile\|linkAuth\|mapAuthUid\|authUid\|associateAuth\|matchAuth\|migrateDoc\|reconciledFrom" --include="*.ts" --include="*.js"
+```
+
+If reconciliation exists, read the full function body. Evaluate:
+
+| Criterion | Status | Impact if NO |
+|---|---|---|
+| Called on every login (not just first login)? | Y/N | Users who signed up before reconciliation existed are never reconciled |
+| Covers ALL collections that reference member IDs? | Y/N | Member doc migrated but `_allReaders` on CRM records still has old ID |
+| Updates `_allReaders` arrays, not just the member doc? | Y/N | Member can log in but can't see their own records |
+| Handles concurrent reconciliation attempts? | Y/N | Race condition: two logins simultaneously, one wins, one corrupts |
+| Runs BEFORE the first query that checks `request.auth.uid`? | Y/N | First request after login fails with permission denied |
+| Has a fan-out to update related records? | Y/N | Only the member doc is fixed, hundreds of CRM records still broken |
+
+**Bug pattern — reconciliation exists but has gaps:** `reconcileAuthUid()` updates the member doc's ID but does NOT fan out to update `_allReaders` arrays on every CRM record that references that member.
+
+**Bug pattern — reconciliation timing:** Reconciliation runs on first login, but the directory import already populated `_allReaders` on CRM records with the old doc ID. The user can log in but can't see data until a full org-wide access recomputation runs.
+
+**Step 4 — Cross-reference identity values against security rules:**
+
+```bash
+grep -rn "request\.auth\.uid" --include="*.rules"
+```
+
+For each security rule that checks `request.auth.uid`, trace what field it compares against (e.g., `resource.data._access._allReaders`, `resource.data.managerId`, `resource.data.userId`). Then verify: are the values stored in those fields Auth UIDs or doc IDs?
+
+The identity chain must be unbroken:
+```
+Auth UID (from Firebase Auth)
+  → stored in member doc (as doc ID or explicit field)
+  → propagated to _allReaders arrays (as the Auth UID, not the doc ID)
+  → checked by security rules (request.auth.uid == stored value)
+```
+
+If ANY link in this chain converts from Auth UID to doc ID (or vice versa), flag as CRITICAL with tag `rlac-identity-mismatch`.
+
+### Check 5c: Inheritance & departure path verification
+
+Verify that when a user departs or transfers, their owned records and access rights are properly handled.
+
+**Step 1 — Find ownership transfer functions:**
+
+```bash
+grep -rn "transferOwnership\|reassignOwner\|inheritRecords\|departUser\|offboard\|removeFromOrg\|deactivateUser" --include="*.ts" --include="*.js" | grep -v "node_modules\|\.test\."
+```
+
+**Step 2 — Trace the transfer flow (if found):**
+
+Read each transfer function. Does it:
+- Update `_access.ownerId` on transferred records?
+- Recompute `_allReaders`/`_allWriters` after ownership change?
+- Add `transitionGrants` for the departing user (time-limited read access)?
+- Remove the departing user from teams/territories/security groups?
+
+**Step 3 — Check collection coverage:**
+
+Does the transfer hit ALL RLAC/`_access`-enabled collections or just some? Look for a canonical collection list (e.g., `RLAC_ENTITY_COLLECTIONS`, a loop over collection names). If the transfer only covers some collections, records in others become orphaned.
+
+**Step 4 — Check for orphan detection:**
+
+After transfer completes, is there a verification step that queries for records still owned by the departed user? If not, some records may silently remain owned by a deactivated user — invisible to everyone.
+
+**Step 5 — Check manager cascade:**
+
+When a manager departs, do their direct reports get a new manager? Does the manager chain update propagate? If `managerId` on member profiles still points to the departed user, the entire RLAC chain below them breaks.
+
+```bash
+grep -rn "managerChain\|directReports\|getDirectReports\|updateManager" --include="*.ts" --include="*.js" | grep -v "node_modules"
+```
+
+**Step 6 — If no departure flow exists:**
+
+Flag as HIGH with tag `rlac-no-departure-path`. The finding should include a remediation recommendation:
+
+> **Recommended:** Build an identity and ownership authority (registry) that tracks:
+> - User ↔ Auth UID mapping (resolves the doc ID vs Auth UID problem)
+> - Ownership index (which records this user owns, across all collections)
+> - Status lifecycle (provisioned → active → departing → departed → erased)
+> - Inheritance rules (manager inherits owned records on departure)
+> - Transition grants (time-limited read access for departed user during handover)
+> - Access footprint (how many records reference this user in `_allReaders`/`_allWriters`)
+>
+> Without this, departures require scanning every RLAC collection to find affected records — O(N*M) across N collections and M records.
+
 ---
 
 ## RBAC Checks (run if RBAC confidence >= MEDIUM)
