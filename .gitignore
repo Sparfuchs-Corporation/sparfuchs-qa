@@ -7,6 +7,8 @@ dist/
 CLAUDE.local.md
 qa-reports/
 qa-data/
+training-reports/
+architecture-reports/
 
 # PDFs
 *.pdf

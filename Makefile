@@ -19,6 +19,10 @@ qa-review:
 		--repo "$(REPO)" \
 		$(if $(FULL),--full) \
 		$(if $(AUTH),--auth) \
+		$(if $(TRAINING),--training) \
+		$(if $(DOCS),--docs) \
+		$(if $(MODULE),--module "$(MODULE)") \
+		$(if $(JOURNEY),--journey "$(JOURNEY)") \
 		$(if $(PROJECT),--project "$(PROJECT)") \
 		$(if $(PERSON),--person "$(PERSON)") \
 		$(if $(URL),--url "$(URL)")
@@ -34,5 +38,33 @@ qa-build-check:
 	@bash scripts/qa-build-check.sh --repo "$(REPO)"
 qa-schema-check:
 	@bash scripts/qa-schema-check.sh --repo "$(REPO)"
+qa-training:
+	@bash scripts/qa-review-remote.sh \
+		--repo "$(REPO)" --training \
+		$(if $(MODULE),--module "$(MODULE)") \
+		$(if $(JOURNEY),--journey "$(JOURNEY)") \
+		$(if $(PROJECT),--project "$(PROJECT)") \
+		$(if $(PERSON),--person "$(PERSON)")
+qa-docs:
+	@bash scripts/qa-review-remote.sh \
+		--repo "$(REPO)" --docs \
+		$(if $(PROJECT),--project "$(PROJECT)") \
+		$(if $(PERSON),--person "$(PERSON)")
+qa-docs-all:
+	@bash scripts/qa-review-remote.sh \
+		--repo "$(REPO)" --full \
+		--agents "training-system-builder,architecture-doc-builder" \
+		$(if $(PROJECT),--project "$(PROJECT)") \
+		$(if $(PERSON),--person "$(PERSON)")
+qa-stubs:
+	@bash scripts/qa-review-remote.sh \
+		--repo "$(REPO)" --full \
+		--agents "stub-detector" \
+		$(if $(PROJECT),--project "$(PROJECT)") \
+		$(if $(PERSON),--person "$(PERSON)")
+qa-cache-status:
+	npx tsx scripts/file-audit-cache.ts --project "$(PROJECT)" status
+qa-cache-reset:
+	npx tsx scripts/file-audit-cache.ts --project "$(PROJECT)" reset
 qa-setup:
 	npm install

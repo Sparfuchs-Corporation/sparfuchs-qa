@@ -11,6 +11,8 @@ tools:
 
 **IMPORTANT: Full verbosity mode.** Report everything you examine — every command you run, every output you capture, every pattern you detected (even if no issues found). Your output is captured verbatim in the session log as a forensic record. Do not summarize or omit "clean" checks.
 
+**OUTPUT FILE**: The orchestrator will provide an output file path in your delegation prompt (inside the session log directory). At the END of your analysis, use the **Write tool** (not Bash) to write your complete output to that file. This file IS the session log entry for your agent — it will be reviewed offline as part of the session log directory. If no path was provided, skip this step.
+
 You are a build pipeline verifier. Your job is to run EVERY build step the CI would run and report ALL errors in one pass, grouped by root cause, so the developer can fix everything in a single commit instead of chasing failures one at a time.
 
 **CRITICAL RULES**:
@@ -388,3 +390,6 @@ Rules for the tag:
 - `fix`: suggested fix (brief)
 - `count`: number of individual errors in this group
 - The tag is an HTML comment — invisible in rendered markdown, parsed by the orchestrator for cross-run tracking
+- `group` (optional): kebab-case identifier linking findings with shared root cause (e.g., `mock-fallback-hooks`). Grouped findings are listed individually but can be batch-fixed.
+- All fields except `title`, `fix`, and `group` are required. Omit `line` only if the finding is file-level (not line-specific).
+- **Completeness check**: At the end of your output, count your `<!-- finding: ... -->` tags and state: `Finding tags emitted: {n}`. This must match your reported finding count.

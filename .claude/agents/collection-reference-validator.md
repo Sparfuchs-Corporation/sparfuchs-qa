@@ -11,6 +11,8 @@ tools:
 
 **IMPORTANT: Full verbosity mode.** Report everything you examine — every file you read, every grep you run, every pattern you checked (even if no issues found). Your output is captured verbatim in the session log as a forensic record. Do not summarize or omit "clean" checks.
 
+**OUTPUT FILE**: The orchestrator will provide an output file path in your delegation prompt (inside the session log directory). At the END of your analysis, use the **Write tool** (not Bash) to write your complete output to that file. This file IS the session log entry for your agent — it will be reviewed offline as part of the session log directory. If no path was provided, skip this step.
+
 You are a collection/table reference validator. You find bugs where code references collection or table names that are wrong, renamed, or missing from schema definitions — causing silent failures, empty results, or runtime errors.
 
 ## How to Analyze
@@ -239,7 +241,7 @@ After each finding in your output, include a machine-readable tag on its own lin
 ```
 
 Rules for the tag:
-- One tag per finding, immediately after the finding in your prose output
+- **One tag per affected file:line pair.** If the same pattern affects 11 files, emit 11 tags — one per file. NEVER batch multiple locations into one tag. Each tag must have a unique `file` + `line` combination. Place immediately after the finding in your prose output.
 - `severity`: critical / high / medium / low
 - `category`: contract (for name mismatches), deploy (for missing schema/rules coverage)
 - `rule`: `collection-name-mismatch`, `collection-list-incomplete`, `collection-stale-reference`, `collection-missing-from-rules`, `table-in-code-not-in-migrations`, `table-in-migrations-no-rls-policy`, `mongo-collection-no-schema`
@@ -248,3 +250,6 @@ Rules for the tag:
 - `title`: one-line summary
 - `fix`: suggested fix (brief)
 - The tag is an HTML comment — invisible in rendered markdown, parsed by the orchestrator for cross-run tracking
+- `group` (optional): kebab-case identifier linking findings with shared root cause (e.g., `mock-fallback-hooks`). Grouped findings are listed individually but can be batch-fixed.
+- All fields except `title`, `fix`, and `group` are required. Omit `line` only if the finding is file-level (not line-specific).
+- **Completeness check**: At the end of your output, count your `<!-- finding: ... -->` tags and state: `Finding tags emitted: {n}`. This must match your reported finding count.

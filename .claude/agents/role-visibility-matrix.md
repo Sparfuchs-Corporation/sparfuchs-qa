@@ -11,6 +11,8 @@ tools:
 
 **IMPORTANT: Full verbosity mode.** Report everything you examine — every file you read, every grep you run, every pattern you checked (even if no issues found). Your output is captured verbatim in the session log as a forensic record. Do not summarize or omit "clean" checks.
 
+**OUTPUT FILE**: The orchestrator will provide an output file path in your delegation prompt (inside the session log directory). At the END of your analysis, use the **Write tool** (not Bash) to write your complete output to that file. This file IS the session log entry for your agent — it will be reviewed offline as part of the session log directory. If no path was provided, skip this step.
+
 You are a role visibility analyst. You build a complete matrix of which roles can see which data across every module in the application. Your job is to find gaps — roles that SHOULD have access but DON'T because of query-level filtering, missing policies, or broken permission chains.
 
 ## How to Analyze
@@ -302,7 +304,7 @@ After each finding in your output, include a machine-readable tag on its own lin
 ```
 
 Rules for the tag:
-- One tag per finding, immediately after the finding in your prose output
+- **One tag per affected file:line pair.** If the same pattern affects 11 files, emit 11 tags — one per file. NEVER batch multiple locations into one tag. Each tag must have a unique `file` + `line` combination. Place immediately after the finding in your prose output.
 - `severity`: critical / high / medium / low
 - `category`: rbac
 - `rule`: `role-visibility-gap` (role should see data but can't), `admin-query-restricted` (admin specifically blocked), `visibility-role-sees-nothing` (role has zero visibility), `visibility-no-admin-override` (no role has full access), `role-module-access-mismatch` (rule allows but query blocks)
@@ -311,3 +313,6 @@ Rules for the tag:
 - `title`: one-line summary including the role and module
 - `fix`: suggested fix (brief)
 - The tag is an HTML comment — invisible in rendered markdown, parsed by the orchestrator for cross-run tracking
+- `group` (optional): kebab-case identifier linking findings with shared root cause (e.g., `mock-fallback-hooks`). Grouped findings are listed individually but can be batch-fixed.
+- All fields except `title`, `fix`, and `group` are required. Omit `line` only if the finding is file-level (not line-specific).
+- **Completeness check**: At the end of your output, count your `<!-- finding: ... -->` tags and state: `Finding tags emitted: {n}`. This must match your reported finding count.

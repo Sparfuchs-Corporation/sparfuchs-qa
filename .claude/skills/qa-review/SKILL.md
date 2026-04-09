@@ -15,16 +15,22 @@ Comprehensive QA review that discovers a project, assesses risk, delegates to sp
 - Document these as inherent scope boundaries in the gap analysis, not as pipeline defects
 
 **CRITICAL RULES**:
-- Do NOT create additional files in `qa-reports/` beyond the ones specified below (no raw JSON dumps, no per-agent output files, no intermediate results).
+- Do NOT create files in `qa-reports/` beyond the ones specified below. The session log directory and its per-agent files are part of the specified output.
 - File names MUST use today's calendar date (the date the review is run), NOT commit dates, analysis timestamps, or git log dates.
-- **Session log = full debug log.** Think of it as console output at maximum verbosity. Every agent's complete unedited response, every error message, every tool call result, every file read, every search executed. Never summarize or condense anything in the session log. It is the forensic record of exactly what happened during the review.
-- **Report = full findings.** Every individual finding from every agent listed with file:line, description, and fix. Never batch or summarize findings (e.g., "11-15. Minor issues" is forbidden — list each one).
-- You produce EXACTLY 5 output files. No more, no less:
-  1. `{YYYY-MM-DD}_{project-slug}_session-log.md` — full debug log
-  2. `{YYYY-MM-DD}_{project-slug}_qa-report.md` — all findings
-  3. `{YYYY-MM-DD}_{project-slug}_spec-report.md` — functional spec verification (from @spec-verifier)
-  4. `{YYYY-MM-DD}_{project-slug}_qa-gaps.md` — QA coverage gap analysis (from @qa-gap-analyzer)
-  5. `{YYYY-MM-DD}_{project-slug}_remediation-plan.md` — prioritized, phased action plan for fixing findings
+- **Session log = directory of per-agent files.** Instead of one monolithic file, create `{output-dir}/{YYYY-MM-DD}_{project-name}_session-log/`. The orchestrator writes `_index.md` (header, discovery, scope, agent status table). Each agent writes its own file with its complete unedited output using the Write tool. **The orchestrator NEVER transcribes or summarizes agent output** — agents write their own files directly. Reviewers browse the directory offline. If `--summary` flag is passed, fall back to the old single-file session log with agent summaries.
+- **Report = full findings, generated from findings.jsonl.** Every individual finding listed with file:line, description, and fix. The Findings sections are GENERATED from the findings.jsonl file, not written from memory. One finding per file:line pair — if a pattern repeats in 11 files, the report shows 11 numbered findings. Never batch or summarize (e.g., "11-15. Minor issues" is forbidden; "useSetup.ts + 10 more hooks" is forbidden — list each one).
+- You produce 5 core output files (always), plus optional files when `--training` or `--docs` flags are present:
+  1. `{YYYY-MM-DD}_{project-name}_session-log/` — session log **directory** containing:
+     - `_index.md` — run metadata, discovery, scope, agent status table, closing summary
+     - `{HH-MM-SS}_{agent-name}.md` — one file per agent with complete output, named by local launch time (e.g., `04-21-33_build-verifier.md`, `04-33-12_security-reviewer.md`). Filesystem sort = execution order.
+  2. `{YYYY-MM-DD}_{project-name}_qa-report.md` — all findings
+  3. `{YYYY-MM-DD}_{project-name}_spec-report.md` — functional spec verification (from @spec-verifier)
+  4. `{YYYY-MM-DD}_{project-name}_qa-gaps.md` — QA coverage gap analysis (from @qa-gap-analyzer)
+  5. `{YYYY-MM-DD}_{project-name}_remediation-plan.md` — prioritized, phased action plan for fixing findings
+  6. `{YYYY-MM-DD}_{project-name}_training-spec.md` — training content (when `--training`, OVERVIEW mode)
+  6a. `{YYYY-MM-DD}_{project-name}_training-deep-{module}.md` — training deep-dive (when `--training` + `Module: X`)
+  6b. `{YYYY-MM-DD}_{project-name}_training-journey-{slug}.md` — training journey (when `--training` + `Journey: X`)
+  7. `{YYYY-MM-DD}_{project-name}_architecture.md` — architecture documentation (when `--docs`)
 
 ## Step 0: Intake Interview
 
@@ -90,9 +96,14 @@ test -f qa-data/{project-slug}/current-baseline.json && echo "exists" || echo "n
 
 ## Step 1: Initialize Output Files
 
-Write both files immediately after intake.
+Create the session log directory and write the index file and report header immediately after intake.
 
-**File 1 — Session Log**: Write using the Write tool:
+**Session Log Directory**: Create using Bash `mkdir -p`:
+```bash
+mkdir -p {output-dir}/{YYYY-MM-DD}_{project-name}_session-log
+```
+
+**File 1 — Session Log Index** (`_index.md` inside the directory): Write using the Write tool:
 
 ```markdown
 # QA Session Log — {Project Name}
@@ -113,7 +124,15 @@ Write both files immediately after intake.
 - Initiated by: {person name}
 - Output directory: {output dir}
 - Run ID: {run-id}
+
+## Agent Status
+
+| # | Agent | Launch Time | Findings | Status | Output File |
+|---|---|---|---|---|---|
+| | _(populated as agents complete)_ | | | | |
 ```
+
+Note: If `--summary` flag was passed, create a single session log file instead of a directory (old behavior).
 
 **File 2 — QA Report**: Write the header block using the Write tool:
 
@@ -196,6 +215,19 @@ Parse `$ARGUMENTS` for execution mode flags. Only one mode flag is allowed:
 | `--tier2` | Static + Integrity | Stage 0-2: Tier 1 + dependency audit, SCA, IaC review, schema-migration, mock-integrity, env-parity, boundary fuzzing, test generation. **Excludes**: test execution, live probing. |
 | (none) | Diff review | Risk triage picks agents based on what changed |
 
+Also parse these **additive flags** (can combine with any tier):
+
+| Flag | Effect |
+|---|---|
+| `--training` | After QA stages complete, run training content generation via `@training-system-builder` |
+| `--docs` | After QA stages complete, run architecture documentation via `@architecture-doc-builder` |
+
+These are NOT mutually exclusive with tier flags. `--full --training --docs` runs a complete audit plus generates training content and architecture docs.
+
+Also check for training sub-mode keywords in the prompt:
+- `Module: {name}` → training deep-dive on that module
+- `Journey: {description}` → training cross-module journey
+
 Also parse `--model-override {opus|sonnet|haiku}` — if present, ALL agents use this model regardless of their frontmatter `model` field. Log the override to the session log.
 
 ### Full Repo Audit (`--full`, `--tier1`, or `--tier2` flag present)
@@ -271,6 +303,7 @@ Purpose: comprehensive static analysis — risk scoring, code quality, security,
 | `@dead-code-reviewer` | Orphaned code, unused exports |
 | `@spec-verifier` | Features vs PRD/spec — Complete / Stubbed / Shell / Broken |
 | `@ui-intent-verifier` | UI labels vs actual behavior |
+| `@stub-detector` | Non-functional code — fake saves, hardcoded data, dead integrations, vibe-coded features |
 
 **Run style**: All parallel.
 **Gate**: Optional — warnings allowed, critical/high findings logged. If >50% features are Stubbed/Broken, log warning and tell Stage 2 agents to skip those files.
@@ -381,18 +414,37 @@ If the repo has ≤50 source files, skip chunking — run all agents once agains
 
 For each agent selected in Step 4, run it against the target repo. Two agent types:
 
-**CRITICAL RULE: The session log is a FULL DEBUG LOG.** It must capture everything — like console output with full verbosity. Every agent communication, every error, every tool call result, every file that was read, every search that was run. The session log is the forensic record of exactly what happened. Never summarize, condense, or omit output. If an agent returned 500 lines of analysis, all 500 lines go in the session log.
+**ARCHITECTURE: Per-agent output files.** Each agent writes its own complete output to a dedicated file in the session log directory. The orchestrator does NOT copy agent output — that eliminates the summarization problem. The session log directory IS the forensic record.
 
 ### Analysis Agents (produce findings only)
 
 For each:
-1. Append `### {Agent Name} — {timestamp}` to session log
-2. Append `Delegating to @{agent-name}...` to session log
-3. Run the agent
-4. Append the agent's **complete, unedited output** to the session log — every finding, every file it examined, every error it hit, every note it made. Do NOT summarize or paraphrase. Copy the full agent response verbatim.
-5. If the agent hit errors or permission issues, log those too with full error messages
-6. Collect findings (file, line, severity, issue, fix) for the report
-7. **Stream findings to JSONL**: Parse `<!-- finding: {...} -->` tags from the agent's output. For each tag found, append the JSON object as a line to `qa-data/{project-slug}/runs/{run-id}/findings.jsonl` via Bash: `echo '{json}' >> qa-data/{project-slug}/runs/{run-id}/findings.jsonl`. Add the `agent` field if not present in the tag.
+1. **Determine the agent's output file path**: `{session-log-dir}/{HH-MM-SS}_{agent-name}.md`. The orchestrator tracks each agent's launch time and includes the timestamp in the filename. For chunked agents: `{HH-MM-SS}_{agent-name}-chunk-{N}.md`.
+2. **Include the output file instruction in the delegation prompt**:
+   ```
+   IMPORTANT — Write your complete output to a file.
+   At the END of your analysis, use the Write tool to write your ENTIRE response to:
+     {agent-output-path}
+   Do NOT use Bash for this — use the Write tool directly.
+   This file must contain everything: every file you read, every grep you ran,
+   every finding with evidence, every clean check. This IS the forensic record.
+   ```
+   **Why Write instead of Bash**: Bash heredocs can be blocked by safety hooks (seen in practice). The Write tool is always available to agents and handles large content without shell escaping issues.
+3. **Run the agent** (in background for parallel stages)
+4. **On completion, verify output file exists** via Glob. If MISSING, write whatever the agent returned (even if summarized from notification) to the output file as a fallback.
+5. **Update `_index.md` agent status table** with: agent name, launch time, finding count, status (complete/failed/missing-output), duration.
+6. **Stream findings to JSONL (MANDATORY — report generation depends on this)**:
+   a. After the agent completes and its output file exists, use Grep to extract ALL `<!-- finding: {...} -->` tags from the output file (not from memory).
+   b. Validate each tag has required fields: `severity`, `category`, `file`, `title`, `fix`. If `line` is missing, set to 0.
+   c. Add `agent` field (agent name) and `runId` field if not present.
+   d. Read the current findings.jsonl, append the new entries, and Write the updated file.
+   e. Count tags parsed vs findings the agent claimed to report. If mismatch, log: `"FINDING TAG GAP: {agent} reported {n} findings but only {m} tags parsed."` Then extract missing findings from the agent's prose output and create tags for them.
+   f. After ALL agents complete, count total lines in findings.jsonl. Log: `"Total streamed findings: {n}"`.
+7. **Expand batched agent findings**: If an agent's output batches multiple locations into one finding (e.g., "useSetup + 10 more hooks — 11 web hooks..."), the orchestrator MUST expand these into individual findings.jsonl entries:
+   a. Identify all affected files/lines from the agent's text
+   b. Create one JSONL entry per file:line, copying severity/category/fix
+   c. Each entry gets a unique title (e.g., "useSetup falls back to MOCK_ data", "useKpiDashboard falls back to MOCK_ data")
+   d. Add a `group` field linking them (e.g., `"group": "mock-fallback-hooks"`)
 8. **Tag deployment scope**: If Step 2.5 detected deployment scope, add a `scope` field to each finding based on the file path: `"deployed"` if the file is in a deployed directory, `"mfe-pending"` if in an MFE-pending directory. Files in `libs/`, `functions/`, `firestore/` are always `"deployed"`.
 
 ### Coverage Enforcement (after all chunked agents complete)
@@ -413,17 +465,20 @@ For each:
 **Credential pass-through**: If a credentials file path was noted during intake, include it in the delegation prompt to generator agents (`@e2e-tester`, `@crud-tester`, `@contract-reviewer`): "Authenticated testing is available. Read the credential file at {path} using `Bash(cat {path})` and use the `strategy`, `credentials`, `target`, and `metadata` fields to generate test specs with proper authentication setup. Do NOT log the credential values — only log the strategy type."
 
 For each:
-1. Append `### {Agent Name} — {timestamp}` to session log
-2. Ensure `generated/{project-name-slug}/` directory exists in the sparfuchs-qa repo (use Bash `mkdir -p`)
-3. Run the agent, instructing it to write scripts to `generated/{project-name-slug}/{category}/`
-4. After generation, update `generated/{project-name-slug}/manifest.json`:
+1. **Determine the agent's output file path**: `{session-log-dir}/{HH-MM-SS}_{agent-name}.md` (same pattern as analysis agents).
+2. Ensure `generated/{project-name}/` directory exists in the sparfuchs-qa repo (use Bash `mkdir -p`)
+3. Run the agent, instructing it to:
+   - Write scripts to `generated/{project-name}/{category}/`
+   - Write its complete analysis output (including script contents, execution results, errors) to the output file using the Write tool
+4. After generation, update `generated/{project-name}/manifest.json`:
    - If the file exists, read it first and merge new entries
    - Each entry: `{ "file": "{path}", "agent": "{name}", "timestamp": "{ISO}", "targetCommit": "{SHA}" }`
 5. Attempt execution: run `npx tsx {generated-script}` via Bash
    - If external tool not installed (k6, etc.): log `"Script generated but not executed — {tool} not installed"`
    - If executed: capture full stdout/stderr
-6. Append **everything** inline to the session log: the agent's full output, the generated script contents, the complete execution output (stdout + stderr), exit codes, and any errors. Do NOT create separate output files and do NOT truncate.
-7. Collect findings from execution results for the report
+6. Verify the agent output file exists. If MISSING, write whatever was returned to the file as fallback.
+7. Update `_index.md` agent status table.
+8. Collect findings from execution results for the report
 
 ### Agent Routing Table
 
@@ -455,6 +510,7 @@ For each:
 | Always (full audit) or repo hygiene concerns | `@dead-code-reviewer` | Analysis |
 | Config files, env vars, database indexes/rules/migrations, CI/CD build configs, or data-handling/workflow logic changed | `@deploy-readiness-reviewer` | Analysis |
 | Frontend files with interactive elements (buttons, forms, toggles, links) changed | `@ui-intent-verifier` | Analysis |
+| Always (full audit) or interactive UI/handler/service files changed | `@stub-detector` | Analysis |
 
 ### Stage 2 Agents (Integrity & Prep)
 
@@ -492,11 +548,96 @@ After all domain agents complete (Step 5), run `@spec-verifier`:
 1. Delegate to `@spec-verifier` with the target repo path, the run ID, today's date, and the output file path: `{output-dir}/{YYYY-MM-DD}_{project-slug}_spec-report.md`
 2. The agent searches for PRD/spec documents. If found: Mode A (verify). If not: Mode B (reverse-engineer).
 3. It writes the spec report directly to the output file
-4. Append the agent's full verbatim output to the session log under `### Spec Verifier — {timestamp}`
+4. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_spec-verifier.md` (include path in delegation prompt). Update `_index.md` agent status table.
+
+## Step 5.7: Training & Documentation Generation (optional)
+
+Skip this step entirely if neither `--training` nor `--docs` flags are present.
+
+### Training Content Generation (`--training` flag)
+
+1. Detect training sub-mode from the user prompt:
+   - `"Module: {name}"` → DEEP-DIVE mode on that module
+   - `"Journey: {description}"` → JOURNEY mode
+   - Neither → OVERVIEW mode
+
+2. Determine the output file name:
+   - OVERVIEW: `{output-dir}/{YYYY-MM-DD}_{project-slug}_training-spec.md`
+   - DEEP-DIVE: `{output-dir}/{YYYY-MM-DD}_{project-slug}_training-deep-{module-slug}.md`
+   - JOURNEY: `{output-dir}/{YYYY-MM-DD}_{project-slug}_training-journey-{journey-slug}.md`
+
+3. Delegate to `@training-system-builder` with this prompt:
+
+   ```
+   Generate training content for this repository.
+   
+   Mode: {OVERVIEW / DEEP-DIVE / JOURNEY}
+   {If DEEP-DIVE: "Module: {module name}"}
+   {If JOURNEY: "Journey: {journey description}"}
+   
+   The session log at {session-log-path} contains analysis from these QA agents that already examined this codebase:
+   - @spec-verifier: feature inventory (Complete/Stubbed/Shell/Broken), user personas, route map
+   - @ui-intent-verifier: UI element inventory, handler traces, settings sweep
+   - @rbac-reviewer: role definitions, hierarchy, route guards, permission matrix
+   - @stub-detector: stub classifications (training blockers)
+   - @collection-reference-validator: collection/table names, cross-references
+   
+   Read the session log to consume their findings. Do NOT re-discover what they already found.
+   
+   Write output to: {training output file path}
+   Previous training specs (if any): {output-dir}/*_training-*.md
+   ```
+
+4. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_training-system-builder.md`. Update `_index.md` agent status table.
+
+### Architecture Documentation (`--docs` flag)
+
+1. Delegate to `@architecture-doc-builder` with this prompt:
+
+   ```
+   Generate architecture documentation for this repository.
+   
+   The session log at {session-log-path} contains analysis from these QA agents:
+   - @spec-verifier: feature/route inventory
+   - @rbac-reviewer: auth architecture, role hierarchy
+   - @collection-reference-validator: data model references
+   - @contract-reviewer: API contract analysis
+   - @deploy-readiness-reviewer: env var/config architecture
+   
+   Read the session log to consume their findings. Do NOT re-discover what they already found.
+   
+   Write output to: {output-dir}/{YYYY-MM-DD}_{project-slug}_architecture.md
+   ```
+
+2. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_architecture-doc-builder.md`. Update `_index.md` agent status table.
 
 ## Step 6: Write Final Report
 
-**CRITICAL RULE: FULL DETAIL, NEVER SUMMARIZE.** Every single finding from every agent must be listed individually with its file path, line number, full description, and fix. NEVER batch findings like "11-15. Minor issues across X" — each one gets its own numbered line with specifics. The entire point of specialist agents is their detailed analysis. If an agent reported 15 findings, the report lists 15 findings.
+**CRITICAL RULE: ONE FINDING PER FILE:LINE. GENERATED FROM findings.jsonl.**
+
+The Findings sections are GENERATED from findings.jsonl (compiled in Step 6.0 below), not written from memory. This ensures every finding is individually listed.
+
+Rules:
+1. **One finding per file:line pair.** If a pattern repeats in 11 files, the report shows 11 numbered findings.
+2. **NEVER batch**: `"257. [stub] useSetup.ts:206 + 10 more hooks"` is FORBIDDEN. Write 11 separate findings.
+3. **NEVER range-number**: `"11-15. Minor issues across X"` is FORBIDDEN.
+4. **NEVER use vague locations**: `"Multiple routes lack role checks"` is FORBIDDEN. Each route gets its own finding.
+5. **When agents batch despite instructions**: The orchestrator expanded batched findings in Step 5 item 7 BEFORE reaching this step.
+6. **Related findings linked by `group`**: If findings share a root cause (linked by `group` field in JSONL), add a note after the last in the group: `> _Findings {n}-{m} share root cause: {group}. Can be batch-fixed._` Each finding STILL gets its own numbered line.
+7. **Validation catches violations**: Step 6.1 scans the final report for anti-patterns and fixes them.
+
+If an agent reported 15 findings, the report lists 15 findings. If an agent batched 11 locations into 1 finding, the report STILL lists 11 findings (one per location, expanded in Step 5 item 7).
+
+### Step 6.0: Compile Findings from JSONL (required before writing report)
+
+The findings.jsonl is the SINGLE SOURCE OF TRUTH for the Findings sections. Do NOT write findings from memory.
+
+1. **Read findings.jsonl**: Read `qa-data/{project-name}/runs/{run-id}/findings.jsonl`. Parse each line as JSON.
+2. **Deduplicate by file+line+rule**: If multiple agents reported the same file:line with the same rule, keep the entry with the most detailed title and fix. Prefer higher severity. Record contributing agents.
+3. **Sort**: severity (critical > high > medium > low) > category > file path (alphabetical).
+4. **Assign sequential numbers**: 1 through N across all severity sections.
+5. **Format each finding**: `{n}. [{agent}] \`{file}:{line}\` — {title}. **Fix**: {fix}`
+6. **Count and verify**: Total numbered findings MUST equal the deduplicated JSONL count.
 
 Append the full report body to File 2 (`_qa-report.md`) using Edit:
 
@@ -675,6 +816,24 @@ Group by severity. Every finding individually listed — no batching, no summari
 - Duration: {elapsed time}
 ```
 
+## Step 6.1: Validate Report Completeness
+
+After writing the report, verify completeness and format:
+
+1. **Count findings in report**: Count all numbered findings in the Findings sections using Grep for lines matching the pattern `^\d+\. \[`.
+2. **Count findings in JSONL**: Count lines in `qa-data/{project-name}/runs/{run-id}/findings.jsonl` (after deduplication in Step 6.0).
+3. **Compare**:
+   - Report count < JSONL count: findings lost during report writing. Log `"VALIDATION FAIL: Report has {n} but JSONL has {m}."` Re-read JSONL, identify missing entries, append to correct severity section.
+   - Report count > JSONL count: findings added without tags. Log warning and backfill JSONL.
+   - Counts match: Log `"VALIDATION PASS: {n} findings in both report and JSONL."`.
+4. **Scan for anti-patterns** in the report:
+   - `+ \d+ more` — indicates batching
+   - `\d+-\d+\. ` — indicates range-numbered findings
+   - `Multiple ` or `Various ` at start of a finding description — indicates vague findings
+   - Lines matching the finding format that lack backtick-wrapped `file:line` — indicates missing location
+   For each anti-pattern found, log a warning and fix it inline.
+5. **Log validation result** to `_index.md` in the session log directory under `## Report Validation`.
+
 ## Step 6.25: Build Findings Index & Delta
 
 After writing the report, process the streamed findings for cross-run tracking:
@@ -700,20 +859,22 @@ If this is the first run (no baseline), skip steps 3-4 and just write the baseli
 
 ## Step 7: Finalize Session Log
 
-Append a closing section to the session log using Edit:
+Append a closing section to `_index.md` in the session log directory using Edit:
 
 ```markdown
 ---
 
 ## Session Complete
 
-- **Agents run**: {comma-separated list}
+- **Agents run**: {n} (see agent status table above, each with its own .md file in this directory)
 - **Total findings**: {n} ({n} deployed, {n} MFE-pending)
 - **File coverage**: {pct}% (target: 98%)
 - **Verdict**: {PASS/NEEDS CHANGES/BLOCKED}
 - **Report written to**: {report file path}
 - **Spec report**: {spec report file path}
-- **Session log**: {session log file path}
+- **Session log directory**: {session log directory path}
+- **Per-agent files**: {n} files (browse directory for complete agent output)
+- **Report validation**: {PASS/FAIL} (see ## Report Validation above)
 - **Duration**: {elapsed time}
 - **Completed**: {ISO timestamp}
 

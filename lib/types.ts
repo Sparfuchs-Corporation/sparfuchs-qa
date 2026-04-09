@@ -145,6 +145,26 @@ export interface ProjectConfig {
   totalRuns: number;
 }
 
+// --- File audit cache (incremental auditing) ---
+
+export interface FileAuditEntry {
+  lastAuditedRunId: string;
+  lastAuditedCommitSha: string;
+  contentHash: string;
+  findingIds: string[];
+  agents: string[];
+}
+
+export interface FileAuditCache {
+  schemaVersion: 1;
+  lastFullAudit: {
+    runId: string;
+    commitSha: string;
+    timestamp: string;
+  };
+  files: Record<string, FileAuditEntry>;
+}
+
 // --- GCP QA Service ingest contract ---
 
 export interface QaIngestPayload {
