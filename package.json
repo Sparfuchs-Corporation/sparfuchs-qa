@@ -19,6 +19,15 @@
     "qa:cleanup": "tsx scripts/qa-cleanup.ts",
     "qa:sync": "tsx scripts/qa-firestore-sync.ts"
   },
+  "dependencies": {
+    "ai": "^6.0.0",
+    "@ai-sdk/xai": "^1.0.0",
+    "@ai-sdk/google": "^1.0.0",
+    "@ai-sdk/anthropic": "^1.0.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.23.0",
+    "fast-glob": "^3.3.0"
+  },
   "devDependencies": {
     "@types/node": "^25.5.2",
     "firebase-admin": "^13.7.0",

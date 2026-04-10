@@ -1,0 +1,60 @@
+# Sparfuchs-QA v4.0 — Multi-LLM Orchestration Config
+#
+# Tier mapping from agent frontmatter:
+#   opus   -> heavy (deep analysis, synthesis, security)
+#   sonnet -> mid   (standard review, code quality)
+#   haiku  -> light (simple checks, doc review, fixture gen)
+#
+# Grok is the recommended default provider for honesty-critical agents.
+# All settings are configurable per-user and per-agent.
+
+defaultProvider: xai
+
+# --- Security ---
+# public     = any enabled provider can receive repo data
+# internal   = only providers on your org-approved list (configure approvedProviders below)
+# restricted = orchestrated engine disabled, Claude CLI only (no data to external APIs)
+dataClassification: public
+redactSecrets: true
+# approvedProviders: [anthropic]   # uncomment for 'internal' classification
+
+providers:
+  xai:
+    enabled: true
+    apiKeyEnvVar: XAI_API_KEY
+  google:
+    enabled: true
+    apiKeyEnvVar: GOOGLE_GENERATIVE_AI_API_KEY
+  anthropic:
+    enabled: true
+    apiKeyEnvVar: ANTHROPIC_API_KEY
+  # openai: deferred to Phase 2
+
+fallbackChain: [xai, google, anthropic]
+
+tiers:
+  heavy:
+    xai: grok-3
+    google: gemini-2.5-pro
+    anthropic: claude-opus-4-20250514
+  mid:
+    xai: grok-3-mini
+    google: gemini-2.5-flash
+    anthropic: claude-sonnet-4-20250514
+  light:
+    xai: grok-3-mini-fast
+    google: gemini-2.0-flash-lite
+    anthropic: claude-haiku-4-5-20251001
+
+# Per-agent overrides
+# Grok-preferred on agents where honesty/low-hallucination is critical
+agentOverrides:
+  security-reviewer:
+    provider: xai
+  qa-gap-analyzer:
+    provider: xai
+  ui-intent-verifier:
+    provider: xai
+    disableBash: true   # Read/Grep/Glob only — highest lockdown
+  release-gate-synthesizer:
+    provider: xai

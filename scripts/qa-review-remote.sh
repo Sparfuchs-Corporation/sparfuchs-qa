@@ -96,6 +96,8 @@ while [[ $# -gt 0 ]]; do
     --docs)      DOCS="1"; shift ;;
     --module)    MODULE="$2"; shift 2 ;;
     --journey)   JOURNEY="$2"; shift 2 ;;
+    --engine)    ENGINE="$2"; shift 2 ;;
+    --provider)  PROVIDER="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -356,12 +358,28 @@ echo "Auth:         ${CRED_FILE:-none}"
 echo "==========================="
 echo ""
 
-# --- Launch Claude from within target repo ---
+# --- Launch engine ---
 cd "$REPO"
-SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
-claude \
-  --append-system-prompt-file "$PROMPT_FILE" \
-  --add-dir "$REPORTS_DIR" \
-  --add-dir "$SPARFUCHS_ROOT/qa-data" \
-  --permission-mode default \
-  "$USER_PROMPT"
+
+if [[ "${ENGINE:-claude}" == "claude" ]]; then
+  # Existing Claude Code CLI path (unchanged)
+  SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
+  claude \
+    --append-system-prompt-file "$PROMPT_FILE" \
+    --add-dir "$REPORTS_DIR" \
+    --add-dir "$SPARFUCHS_ROOT/qa-data" \
+    --permission-mode default \
+    "$USER_PROMPT"
+else
+  # Multi-LLM orchestrated engine (Phase 1: 7 heavy agents)
+  echo "Engine: orchestrated (Vercel AI SDK)"
+  SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
+  npx tsx "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" \
+    --repo "$REPO" \
+    --sparfuchs-root "$SPARFUCHS_ROOT" \
+    --reports-dir "$REPORTS_DIR" \
+    --run-id "$RUN_ID" \
+    --mode "$MODE" \
+    --user-prompt "$USER_PROMPT" \
+    ${PROVIDER:+--provider "$PROVIDER"}
+fi

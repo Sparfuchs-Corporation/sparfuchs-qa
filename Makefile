@@ -25,7 +25,9 @@ qa-review:
 		$(if $(JOURNEY),--journey "$(JOURNEY)") \
 		$(if $(PROJECT),--project "$(PROJECT)") \
 		$(if $(PERSON),--person "$(PERSON)") \
-		$(if $(URL),--url "$(URL)")
+		$(if $(URL),--url "$(URL)") \
+		$(if $(ENGINE),--engine "$(ENGINE)") \
+		$(if $(PROVIDER),--provider "$(PROVIDER)")
 qa-delta:
 	npx tsx scripts/qa-delta-report.ts --project "$(PROJECT)"
 qa-evolve-v2:
@@ -68,3 +70,19 @@ qa-cache-reset:
 	npx tsx scripts/file-audit-cache.ts --project "$(PROJECT)" reset
 qa-setup:
 	npm install
+qa-keys-check:
+	@npx tsx -e "import{listStoredKeys}from'./lib/orchestrator/credential-store.js';const k=listStoredKeys();console.log(k.length?'Stored keys: '+k.join(', '):'No keys in OS keychain. Use: make qa-keys-setup')"
+qa-keys-setup:
+	@echo "Store API keys in your OS keychain (encrypted at rest):"
+	@echo ""
+	@echo "macOS:"
+	@echo "  security add-generic-password -s sparfuchs-qa -a XAI_API_KEY -w 'your-key'"
+	@echo "  security add-generic-password -s sparfuchs-qa -a GOOGLE_GENERATIVE_AI_API_KEY -w 'your-key'"
+	@echo "  security add-generic-password -s sparfuchs-qa -a ANTHROPIC_API_KEY -w 'your-key'"
+	@echo ""
+	@echo "Linux:"
+	@echo "  echo 'your-key' | secret-tool store --label=sparfuchs-qa service sparfuchs-qa key XAI_API_KEY"
+	@echo ""
+	@echo "Or set environment variables: export XAI_API_KEY=your-key"
+qa-hashes-update:
+	@npx tsx -e "import{parsePhase1Agents,generateAgentHashes}from'./lib/orchestrator/agent-parser.js';import{writeFileSync}from'fs';const a=parsePhase1Agents('.claude/agents',{});writeFileSync('config/agent-hashes.json',JSON.stringify(generateAgentHashes(a),null,2));console.log('Updated config/agent-hashes.json')"
