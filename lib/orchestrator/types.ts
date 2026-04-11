@@ -21,6 +21,7 @@ export interface AgentOverride {
   provider?: ProviderName;
   tier?: ModelTier;
   disableBash?: boolean;
+  maxSteps?: number;
 }
 
 export interface ModelsYaml {
@@ -65,6 +66,7 @@ export interface AgentRunStatus {
   outputFilePath: string | null;
   outputFileExists: boolean;
   outputSizeBytes: number;
+  coveragePercent: number | null;
   error: string | null;
 }
 
@@ -118,6 +120,9 @@ export interface OrchestrationConfig {
   providerOverride?: ProviderName;
   modelsConfig: ModelsYaml;
   userPrompt: string;
+  moduleScope?: string;
+  referenceDocPaths?: string[];
+  claimsManifestPath?: string;
 }
 
 // --- Credential Store ---
@@ -144,3 +149,117 @@ export interface ToolCallLogEntry {
   args: Record<string, unknown>;
   timestamp: string;
 }
+
+// --- Chunking ---
+
+export interface FileChunk {
+  id: number;
+  files: string[];
+  primaryDirectory: string;
+}
+
+export interface ChunkPlan {
+  totalFiles: number;
+  checkableFiles: number;
+  chunkSize: number;
+  chunks: FileChunk[];
+  chunkedAgents: string[];
+  unchunkedAgents: string[];
+  excludedFiles: string[];
+}
+
+// --- Testability Pre-Flight ---
+
+export interface LanguageProfile {
+  lang: string;
+  fileCount: number;
+  lineCount: number;
+  percentage: number;
+}
+
+export interface RepoProfile {
+  languages: LanguageProfile[];
+  frameworks: string[];
+  buildTools: string[];
+  packageManager: string | null;
+  isMonorepo: boolean;
+  moduleCount: number;
+  totalSourceFiles: number;
+}
+
+export interface UncheckableReport {
+  minifiedFiles: string[];
+  generatedFiles: string[];
+  binaryAssets: string[];
+  vendoredCode: string[];
+  largeFiles: string[];
+  totalUncheckable: number;
+  totalCheckable: number;
+  checkabilityScore: number;
+}
+
+export interface TestInfraReport {
+  hasTestFramework: boolean;
+  testFramework: string | null;
+  testFileCount: number;
+  testCoverage: number | null;
+  hasE2E: boolean;
+  hasCICD: boolean;
+  hasLinting: boolean;
+  hasTypeChecking: boolean;
+  testToCodeRatio: number;
+}
+
+export interface AgentSkipPrediction {
+  agentName: string;
+  effective: boolean;
+  reason: string;
+}
+
+export interface TestingRecommendation {
+  priority: 'critical' | 'high' | 'medium' | 'low';
+  category: 'test-infra' | 'coverage' | 'agent-config' | 'code-quality' | 'scope';
+  title: string;
+  description: string;
+  action: string;
+}
+
+export interface TestabilityReport {
+  repoProfile: RepoProfile;
+  uncheckable: UncheckableReport;
+  testInfra: TestInfraReport;
+  agentPredictions: AgentSkipPrediction[];
+  recommendations: TestingRecommendation[];
+  scannedAt: string;
+}
+
+// --- Reference Document Verification ---
+
+export type DocClaimType =
+  | 'behavior'
+  | 'architecture'
+  | 'workflow'
+  | 'security'
+  | 'api-contract'
+  | 'data-model'
+  | 'config'
+  | 'integration'
+  | 'marketing';
+
+export interface DocClaim {
+  id: string;
+  sourceDoc: string;
+  sourceSection: string;
+  claimType: DocClaimType;
+  claim: string;
+  verifiable: boolean;
+  keywords: string[];
+}
+
+export type DocVerificationStatus =
+  | 'confirmed'
+  | 'stale'
+  | 'contradicted'
+  | 'unverifiable'
+  | 'missing-from-code'
+  | 'undocumented';

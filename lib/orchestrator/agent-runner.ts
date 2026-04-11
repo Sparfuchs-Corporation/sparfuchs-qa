@@ -6,6 +6,8 @@ import type {
 import { resolveModelForAgent } from './config.js';
 import { createToolSet, type ToolSetOptions } from './tool-implementations.js';
 
+const DEFAULT_MAX_STEPS = 50;
+
 // --- Provider String ID ---
 // AI SDK v6 accepts string model IDs like "xai:grok-3" which are resolved
 // via the globally registered providers from the @ai-sdk/* packages.
@@ -82,12 +84,16 @@ export async function runAgent(
     try {
       const modelId = toModelId(provider, modelName);
 
+      // Resolve per-agent step budget
+      const agentOverride = config.modelsConfig.agentOverrides[agent.name];
+      const maxSteps = agentOverride?.maxSteps ?? DEFAULT_MAX_STEPS;
+
       const result = await generateText({
         model: modelId,
         system: agent.systemPrompt,
         prompt: delegationPrompt,
         tools,
-        stopWhen: stepCountIs(50),
+        stopWhen: stepCountIs(maxSteps),
         temperature: 0.1,
         onStepFinish: (event) => {
           if (event.usage) {
@@ -102,6 +108,22 @@ export async function runAgent(
       if (!result.text || result.text.trim().length === 0) {
         throw new Error('Empty response from model');
       }
+
+      // Check for truncation / context overflow
+      if (result.finishReason === 'length') {
+        process.stderr.write(
+          `  WARNING: ${agent.name} hit context window limit (finishReason=length). Output may be truncated.\n`,
+        );
+      }
+
+      // Track file coverage from tool call log
+      const filesRead = new Set(
+        toolCallLog
+          .filter(t => t.tool === 'Read')
+          .map(t => t.args.file_path as string)
+          .filter(Boolean),
+      );
+      status.coveragePercent = null; // Caller sets this based on chunk assignment
 
       return {
         text: result.text,

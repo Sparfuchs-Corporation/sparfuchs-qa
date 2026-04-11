@@ -1,13 +1,15 @@
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import * as readline from 'node:readline';
-import type { OrchestrationConfig, ProviderName, AgentDefinition } from './types.js';
+import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
 import { parsePhase1Agents, validateAgentIntegrity } from './agent-parser.js';
 import { runAgent } from './agent-runner.js';
 import { ObservabilityTracker } from './observability.js';
 import { QualityAuditor } from './quality-auditor.js';
 import { parseFindingTags, appendFinding } from '../../scripts/qa-findings-manager.js';
+import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
+import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
 
 export async function runOrchestration(config: OrchestrationConfig): Promise<void> {
   // 1. Load and validate config
@@ -40,6 +42,30 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const findingsPath = join(runDir, 'findings.jsonl');
   writeFileSync(findingsPath, '');
 
+  // 2.5. Testability pre-flight scan
+  const testabilityReport = await scanTestability(config.repoPath, config.moduleScope);
+  writeTestabilityReport(testabilityReport, runDir);
+  printTestabilitySummary(testabilityReport);
+
+  // Build set of agents to skip based on testability predictions
+  const agentsToSkip = new Set(
+    testabilityReport.agentPredictions
+      .filter(p => !p.effective)
+      .map(p => p.agentName),
+  );
+
+  // Build excluded files set from uncheckable report
+  const excludedFileSet = new Set([
+    ...testabilityReport.uncheckable.minifiedFiles,
+    ...testabilityReport.uncheckable.generatedFiles,
+    ...testabilityReport.uncheckable.binaryAssets,
+    ...testabilityReport.uncheckable.largeFiles,
+  ]);
+
+  // 4.5. Large codebase chunking
+  const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
+  const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet]);
+
   // 5. Print run header
   process.stderr.write('\n=== Sparfuchs QA Review (orchestrated engine) ===\n');
   process.stderr.write(`Providers: ${available.join(', ')}`);
@@ -49,57 +75,113 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   process.stderr.write('\n');
   process.stderr.write(`Agents: ${agents.length} | Mode: ${config.mode} | Repo: ${config.repoPath}\n`);
   process.stderr.write(`Classification: ${modelsConfig.dataClassification} | Redact secrets: ${modelsConfig.redactSecrets}\n`);
+  if (config.moduleScope) {
+    process.stderr.write(`Module scope: ${config.moduleScope}\n`);
+  }
+  if (chunkPlan) {
+    process.stderr.write(`\n## Chunking\n${formatChunkPlanSummary(chunkPlan)}\n`);
+  }
+  if (agentsToSkip.size > 0) {
+    process.stderr.write(`Skipping ineffective agents: ${[...agentsToSkip].join(', ')}\n`);
+  }
 
-  // 6. Run agents sequentially
+  // 6. Run agents (with chunking support)
   const observer = new ObservabilityTracker();
   const auditor = new QualityAuditor(config, modelsConfig);
 
   for (const agent of agents) {
-    const status = observer.registerAgent(agent.name);
+    // Skip agents predicted as ineffective
+    if (agentsToSkip.has(agent.name)) {
+      const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
+      const status = observer.registerAgent(agent.name);
+      status.status = 'complete';
+      status.error = `Skipped: ${prediction?.reason ?? 'predicted ineffective'}`;
+      status.completedAt = new Date().toISOString();
+      process.stderr.write(`\n--- Skipping ${agent.name}: ${prediction?.reason} ---\n`);
+      continue;
+    }
 
-    // Resolve model info for display
-    const resolved = resolveModelForAgent(
-      agent.name, agent.tier, modelsConfig, config.providerOverride,
-    );
-    status.provider = resolved.provider;
-    status.model = resolved.model;
+    // Determine if this agent should be chunked
+    const shouldChunk = chunkPlan && isChunkedAgent(agent.name);
+    const chunks = shouldChunk ? chunkPlan.chunks : [null];
 
-    observer.startAgent(agent.name);
+    for (const chunk of chunks) {
+      const agentLabel = chunk
+        ? `${agent.name}-chunk-${chunk.id}`
+        : agent.name;
 
-    try {
-      const delegationPrompt = buildDelegationPrompt(agent, config);
+      const status = observer.registerAgent(agentLabel);
 
-      const result = await runAgent(
-        agent, delegationPrompt, config, status,
-        (s) => observer.updateAgent(agent.name, s),
-        (e) => observer.recordFallback(e),
+      // Resolve model info for display
+      const resolved = resolveModelForAgent(
+        agent.name, agent.tier, modelsConfig, config.providerOverride,
       );
+      status.provider = resolved.provider;
+      status.model = resolved.model;
 
-      // Write agent output to session log
-      const outputPath = join(config.sessionLogDir, `${formatTime()}_${agent.name}.md`);
-      writeFileSync(outputPath, result.text);
-      status.outputFilePath = outputPath;
-      status.outputFileExists = true;
-      status.outputSizeBytes = Buffer.byteLength(result.text);
+      observer.startAgent(agentLabel);
 
-      // Extract and stream findings
-      const findings = parseFindingTags(result.text, agent.name);
-      for (const finding of findings) {
-        appendFinding(config.projectSlug, config.runId, finding);
-      }
+      try {
+        let delegationPrompt = buildDelegationPrompt(agent, config);
 
-      observer.completeAgent(agent.name, findings.length, status.outputSizeBytes);
+        // Append chunk-specific file list
+        if (chunk && chunkPlan) {
+          delegationPrompt += buildChunkPromptSuffix(chunk, chunkPlan.chunks.length, config.repoPath);
+        }
 
-      // Quality audit
-      const auditResult = await auditor.check(agent.name, result, findings, status);
-      if (!auditResult.passed) {
-        process.stderr.write(
-          `  QUALITY WARNING: ${auditResult.issues.length} issue(s), score: ${auditResult.score}/100\n`,
+        // Append module scope
+        if (config.moduleScope) {
+          delegationPrompt += `\nTarget module: ${config.moduleScope}. Only analyze files under this directory.\n`;
+        }
+
+        // Inject claims manifest for ref-doc-aware agents
+        if (config.claimsManifestPath && REFDOC_AWARE_AGENTS.has(agent.name)) {
+          delegationPrompt += buildRefDocPromptSuffix(config.claimsManifestPath);
+        }
+
+        const result = await runAgent(
+          agent, delegationPrompt, config, status,
+          (s) => observer.updateAgent(agentLabel, s),
+          (e) => observer.recordFallback(e),
         );
+
+        // Write agent output to session log
+        const outputPath = join(config.sessionLogDir, `${formatTime()}_${agentLabel}.md`);
+        writeFileSync(outputPath, result.text);
+        status.outputFilePath = outputPath;
+        status.outputFileExists = true;
+        status.outputSizeBytes = Buffer.byteLength(result.text);
+
+        // Track coverage for chunked agents
+        if (chunk) {
+          const filesInOutput = new Set<string>();
+          for (const file of chunk.files) {
+            if (result.text.includes(file) || result.text.includes(file.split('/').pop()!)) {
+              filesInOutput.add(file);
+            }
+          }
+          status.coveragePercent = Math.round((filesInOutput.size / chunk.files.length) * 100);
+        }
+
+        // Extract and stream findings
+        const findings = parseFindingTags(result.text, agent.name);
+        for (const finding of findings) {
+          appendFinding(config.projectSlug, config.runId, finding);
+        }
+
+        observer.completeAgent(agentLabel, findings.length, status.outputSizeBytes);
+
+        // Quality audit
+        const auditResult = await auditor.check(agentLabel, result, findings, status);
+        if (!auditResult.passed) {
+          process.stderr.write(
+            `  QUALITY WARNING: ${auditResult.issues.length} issue(s), score: ${auditResult.score}/100\n`,
+          );
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        observer.failAgent(agentLabel, msg);
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      observer.failAgent(agent.name, msg);
     }
   }
 
@@ -115,8 +197,21 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     engine: 'orchestrated',
     mode: config.mode,
     repoPath: config.repoPath,
+    moduleScope: config.moduleScope ?? null,
     startedAt: new Date().toISOString(),
     dataClassification: modelsConfig.dataClassification,
+    testability: {
+      checkabilityScore: testabilityReport.uncheckable.checkabilityScore,
+      totalSourceFiles: testabilityReport.repoProfile.totalSourceFiles,
+      skippedAgents: [...agentsToSkip],
+      recommendations: testabilityReport.recommendations.filter(r => r.priority === 'critical' || r.priority === 'high'),
+    },
+    chunking: chunkPlan ? {
+      totalFiles: chunkPlan.totalFiles,
+      checkableFiles: chunkPlan.checkableFiles,
+      chunks: chunkPlan.chunks.length,
+      excludedFiles: chunkPlan.excludedFiles.length,
+    } : null,
     agents: observer.toStatusArray(),
     fallbackEvents: observer.getFallbackEvents(),
     qualityAudit: auditor.getResults(),
@@ -182,4 +277,27 @@ function formatTime(): string {
   return [now.getHours(), now.getMinutes(), now.getSeconds()]
     .map(n => String(n).padStart(2, '0'))
     .join('-');
+}
+
+// Agents that should receive reference document claims context
+const REFDOC_AWARE_AGENTS = new Set([
+  'ref-doc-verifier',
+  'spec-verifier',
+  'security-reviewer',
+  'contract-reviewer',
+  'compliance-reviewer',
+  'deploy-readiness-reviewer',
+  'rbac-reviewer',
+  'workflow-extractor',
+]);
+
+function buildRefDocPromptSuffix(claimsManifestPath: string): string {
+  return (
+    `\n\nREFERENCE DOCUMENT VERIFICATION MODE\n` +
+    `A claims manifest extracted from reference documents is available at:\n` +
+    `  ${claimsManifestPath}\n` +
+    `Read this file. Each line is a JSON object with a verifiable claim from the reference docs.\n` +
+    `Cross-reference these claims against the codebase as part of your analysis.\n` +
+    `For claims in your domain that are contradicted or stale, emit findings with category "ref-doc".\n`
+  );
 }

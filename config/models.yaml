@@ -58,3 +58,12 @@ agentOverrides:
     disableBash: true   # Read/Grep/Glob only — highest lockdown
   release-gate-synthesizer:
     provider: xai
+  observability-auditor:
+    provider: xai
+    maxSteps: 75        # 6-dimension audit needs more steps
+  workflow-extractor:
+    provider: xai
+    maxSteps: 75        # end-to-end flow tracing
+  ref-doc-verifier:
+    provider: xai
+    maxSteps: 100       # verifying many claims against codebase

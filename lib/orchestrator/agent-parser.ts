@@ -7,6 +7,8 @@ import { mapLegacyTier } from './config.js';
 export const PHASE1_AGENTS = [
   'code-reviewer',
   'security-reviewer',
+  'observability-auditor',
+  'workflow-extractor',
   'ui-intent-verifier',
   'qa-gap-analyzer',
   'release-gate-synthesizer',

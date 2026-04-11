@@ -5,6 +5,7 @@
   "description": "Sparfuchs QA Platform — canaries, scripts, docs, and test fixtures",
   "scripts": {
     "canaries": "tsx canaries/index.ts",
+    "canaries:watch": "tsx canaries/index.ts --watch",
     "qa:quick": "tsx canaries/index.ts",
     "qa:report-push": "tsx scripts/qa-report-adapter.ts",
     "qa:nightly": "tsx scripts/trigger-nightly-regression.ts",
@@ -35,6 +36,6 @@
     "typescript": "^5.4.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

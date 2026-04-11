@@ -14,6 +14,8 @@ qa-verify:
 	npx tsx scripts/package-verify.ts --dry-run
 qa-flaky:
 	npx tsx scripts/flaky-test-tracker.ts --report
+qa-watch:
+	npx tsx canaries/index.ts --watch
 qa-review:
 	@bash scripts/qa-review-remote.sh \
 		--repo "$(REPO)" \
@@ -27,7 +29,14 @@ qa-review:
 		$(if $(PERSON),--person "$(PERSON)") \
 		$(if $(URL),--url "$(URL)") \
 		$(if $(ENGINE),--engine "$(ENGINE)") \
-		$(if $(PROVIDER),--provider "$(PROVIDER)")
+		$(if $(PROVIDER),--provider "$(PROVIDER)") \
+		$(if $(REF_DOCS),--ref-docs "$(REF_DOCS)")
+qa-ref-verify:
+	@bash scripts/qa-review-remote.sh \
+		--repo "$(REPO)" --full \
+		--ref-docs "$(REF_DOCS)" \
+		$(if $(PROJECT),--project "$(PROJECT)") \
+		$(if $(PERSON),--person "$(PERSON)")
 qa-delta:
 	npx tsx scripts/qa-delta-report.ts --project "$(PROJECT)"
 qa-evolve-v2:

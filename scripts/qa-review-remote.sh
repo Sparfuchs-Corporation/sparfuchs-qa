@@ -23,6 +23,8 @@ AGENT_FILES=(
   # Stage 1: Risk & Static Quality
   code-reviewer.md
   security-reviewer.md
+  observability-auditor.md
+  workflow-extractor.md
   performance-reviewer.md
   risk-analyzer.md
   regression-risk-scorer.md
@@ -82,6 +84,7 @@ MODULE=""
 JOURNEY=""
 TRAINING=""
 DOCS=""
+REF_DOCS=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -98,6 +101,7 @@ while [[ $# -gt 0 ]]; do
     --journey)   JOURNEY="$2"; shift 2 ;;
     --engine)    ENGINE="$2"; shift 2 ;;
     --provider)  PROVIDER="$2"; shift 2 ;;
+    --ref-docs)  REF_DOCS="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -331,6 +335,12 @@ if [[ -n "$URL" ]]; then
 fi
 if [[ -n "$CRED_FILE" ]]; then
   USER_PROMPT="$USER_PROMPT Credentials file: $CRED_FILE"
+fi
+if [[ -n "$MODULE" && "$MODE" == "review" ]]; then
+  USER_PROMPT="$USER_PROMPT SCOPE: Only analyze files under $MODULE/"
+fi
+if [[ -n "$REF_DOCS" ]]; then
+  USER_PROMPT="$USER_PROMPT Reference documents: $REF_DOCS"
 fi
 USER_PROMPT="$USER_PROMPT Write reports to: $REPORTS_DIR/"
 
