@@ -1,4 +1,4 @@
-# QA Onboarding — The Forge
+# QA Onboarding — Sparfuchs QA
 
 This guide gets you running QA checks locally in under five minutes.
 For detailed test-type reference, see [TESTING-GUIDE.md](./TESTING-GUIDE.md).
@@ -14,9 +14,6 @@ make qa-setup
 
 # 2. Run the 15 canary checks (fast, no browser needed)
 make qa-quick
-
-# 3. Run full suite: repo unit tests + canaries
-make qa-full
 ```
 
 That is it. If all canaries pass you are good to push.
@@ -27,10 +24,10 @@ That is it. If all canaries pass you are good to push.
 
 | Type | Where | Trigger | Duration |
 |------|-------|---------|----------|
-| **Canaries** | `tests/platform/canaries/` | `make qa-quick` or Cloud Build | ~10 s |
+| **Sparfuchs QA Canaries** | `canaries/` | `make qa-quick` | ~10 s |
 | **BDD Smoke** | `testing/bdd/` | `npx playwright test --project=bdd` | ~30 s |
 | **Repo Unit Tests** | `libs/*/tests/`, `apps/*/tests/` | `npm run test` | ~60 s |
-| **Platform Tests** | `tests/platform/vitest/`, `tests/platform/playwright/` | Synced from GCS, run by QA Platform | varies |
+| **Platform Tests** | `tests/platform/vitest/`, `tests/platform/playwright/` | Synced from GCS | varies |
 
 Canaries are the minimum gate. They run in every Cloud Build pipeline and block
 the deploy if any canary fails.
@@ -40,26 +37,52 @@ the deploy if any canary fails.
 ## Common Commands
 
 ```bash
-# Run only canaries
-make qa-quick
+# --- Quick Checks ---
+make qa-quick                    # Run 15 canary checks (stdout)
+make qa-push                     # Run canaries + push to Firestore
 
-# Run full test suite (unit + canaries)
-make qa-full
+# --- Full QA Reviews ---
+make qa-review REPO=/path FULL=1          # Full audit
+make qa-review REPO=/path                 # Diff review (changed files only)
+make qa-build-check REPO=/path            # Build verification only
+make qa-schema-check REPO=/path           # Schema validation only
 
-# Sync platform-generated tests from GCS
-make qa-sync
+# --- Training & Documentation ---
+make qa-training REPO=/path               # Generate training materials
+make qa-training REPO=/path MODULE="auth" # Training for specific module
+make qa-docs REPO=/path                   # Architecture documentation
+make qa-docs-all REPO=/path               # Full doc generation
+make qa-stubs REPO=/path                  # Stub/fake detection
 
-# Check QA Platform health (Phase 2)
-make qa-health
+# --- Supply Chain & Package Verification ---
+make qa-sca                      # Full SCA check + SBOM
+make qa-sca-push                 # SCA + push results
+make qa-verify                   # SCA dry-run
 
-# Run a specific canary by name
-npx tsx tests/platform/canaries/index.ts --filter "firebase-init"
+# --- Finding Analysis ---
+make qa-delta PROJECT=my-app     # Compare findings across runs
+make qa-cleanup PROJECT=my-app   # Archive old runs (keep 10)
+make qa-flaky                    # Report flaky tests
 
-# Run BDD smoke tests
-npx playwright test --project=bdd
+# --- Evolution & Adaptation ---
+make qa-evolve                   # Analyze canary history, suggest changes
+make qa-evolve-dry               # Dry-run evolution
+make qa-evolve-v2 PROJECT=my-app # Local evolution (uses qa-data/)
 
-# Seed AI baselines into Firestore (one-time setup)
-npx tsx scripts/seed-ai-baselines.ts
+# --- Data & Cache ---
+make qa-sync PROJECT=my-app      # Sync Firestore to local qa-data/
+make qa-cache-status PROJECT=my-app  # Show file audit cache state
+make qa-cache-reset PROJECT=my-app   # Clear file audit cache
+
+# --- API Keys ---
+make qa-keys-check               # List keys in OS keychain
+make qa-keys-setup               # Instructions for key storage
+
+# --- Agent Integrity ---
+make qa-hashes-update            # Regenerate agent-hashes.json
+
+# --- Seed baselines (one-time setup) ---
+npm run qa:seed-baselines
 ```
 
 ---
@@ -71,6 +94,7 @@ npx tsx scripts/seed-ai-baselines.ts
 3. **Review** — A human approves or rejects the draft via the Anvil QA dashboard
 4. **Activation** — Approved tests sync into the repo via `make qa-sync`
 5. **Graduation** — Once a test passes consistently for 5+ builds, it graduates to the permanent suite
+6. **Evolution** — `make qa-evolve` analyzes canary history and suggests threshold tightening for stable canaries or investigation for unstable ones
 
 Tests flow one direction: Platform -> GCS -> Repo. Developers never push tests
 back to GCS manually.
@@ -84,14 +108,18 @@ Canaries are lightweight assertion functions that verify critical invariants.
 ### Step 1 — Create the canary file
 
 ```
-tests/platform/canaries/my-check.canary.ts
+canaries/my-check.canary.ts
 ```
 
-Export a default async function that returns `{ pass: boolean; detail?: string }`.
+Export a default async function that returns:
 
-### Step 2 — Register it
+```typescript
+{ pass: boolean; severity: string; hint: string; value: number; threshold: number; trend?: string }
+```
 
-Add the file path to `tests/platform/canaries/index.ts` in the `canaries` array.
+### Step 2 — Auto-discovery
+
+Sparfuchs QA canaries are auto-discovered — any `*.canary.ts` file in `canaries/` is loaded automatically. No manual registration needed.
 
 ### Step 3 — Test locally
 
@@ -99,7 +127,7 @@ Add the file path to `tests/platform/canaries/index.ts` in the `canaries` array.
 make qa-quick
 ```
 
-If the canary fails, you will see its name and detail message in the output.
+If the canary fails, you will see its name, severity, hint, and value in the output.
 
 ---
 
@@ -117,7 +145,7 @@ If the canary fails, you will see its name and detail message in the output.
 
 | Problem | Fix |
 |---------|-----|
-| `make qa-quick` says "cannot find canaries/index.ts" | Run `npm ci` first or check you are in the repo root |
+| `make qa-quick` fails to find canaries | Run `make qa-setup` first or check you are in the repo root |
 | `make qa-sync` fails with permission denied | Run `gcloud auth login` and ensure you have Storage Object Viewer on the QA bucket |
 | Canary passes locally but fails in Cloud Build | Check that the canary does not depend on local env vars or files outside the repo |
 | Playwright tests time out | Run `npx playwright install chromium --with-deps` to ensure the browser is installed |

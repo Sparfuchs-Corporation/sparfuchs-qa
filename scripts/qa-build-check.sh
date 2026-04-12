@@ -27,9 +27,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$REPO" ]]; then
-  echo "Error: --repo is required" >&2
-  echo "Usage: bash scripts/qa-build-check.sh --repo /path/to/target" >&2
-  exit 1
+  read -rp "Path to local repo to evaluate: " REPO
+  if [[ -z "$REPO" ]]; then
+    echo "Error: repo path is required" >&2
+    exit 1
+  fi
 fi
 
 REPO="$(cd "$REPO" && pwd)"

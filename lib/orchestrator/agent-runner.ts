@@ -1,26 +1,12 @@
-import { generateText, stepCountIs } from 'ai';
 import type {
   AgentDefinition, AgentRunResult, AgentRunStatus,
-  OrchestrationConfig, ProviderName, FallbackEvent, ToolCallLogEntry,
+  OrchestrationConfig, ProviderName, FallbackEvent,
 } from './types.js';
+import { isCliProvider, isApiProvider } from './types.js';
 import { resolveModelForAgent } from './config.js';
-import { createToolSet, type ToolSetOptions } from './tool-implementations.js';
+import { getAdapter } from './adapters/index.js';
 
-const DEFAULT_MAX_STEPS = 50;
-
-// --- Provider String ID ---
-// AI SDK v6 accepts string model IDs like "xai:grok-3" which are resolved
-// via the globally registered providers from the @ai-sdk/* packages.
-
-export function toModelId(provider: ProviderName, modelName: string): string {
-  switch (provider) {
-    case 'xai': return `xai:${modelName}`;
-    case 'google': return `google:${modelName}`;
-    case 'anthropic': return `anthropic:${modelName}`;
-  }
-}
-
-// --- Error Classification ---
+// --- Error Classification (used for fallback decisions) ---
 
 function isRateLimitError(err: unknown): boolean {
   return err instanceof Error && (
@@ -49,29 +35,13 @@ export async function runAgent(
   onStatusChange: (status: AgentRunStatus) => void,
   onFallback: (event: FallbackEvent) => void,
 ): Promise<AgentRunResult> {
-  const toolCallLog: ToolCallLogEntry[] = [];
-  const toolOpts: ToolSetOptions = {
-    repoRoot: config.repoPath,
-    qaDataRoot: config.qaDataRoot,
-    sessionLogDir: config.sessionLogDir,
-    redactSecretsEnabled: config.modelsConfig.redactSecrets,
-    toolCallLog,
-  };
-  const tools = createToolSet(agent, toolOpts);
-
   // Build fallback chain
   const { provider: preferredProvider, model: preferredModel } =
     resolveModelForAgent(agent.name, agent.tier, config.modelsConfig, config.providerOverride);
 
-  const fallbackChain = [
-    { provider: preferredProvider, model: preferredModel },
-    ...config.modelsConfig.fallbackChain
-      .filter(p => p !== preferredProvider && config.modelsConfig.providers[p]?.enabled)
-      .map(p => ({
-        provider: p,
-        model: config.modelsConfig.tiers[agent.tier][p],
-      })),
-  ];
+  const fallbackChain = buildFallbackChain(
+    preferredProvider, preferredModel, agent, config,
+  );
 
   let lastError: Error | null = null;
 
@@ -82,63 +52,21 @@ export async function runAgent(
     onStatusChange(status);
 
     try {
-      const modelId = toModelId(provider, modelName);
+      const adapter = getAdapter(provider);
 
-      // Resolve per-agent step budget
-      const agentOverride = config.modelsConfig.agentOverrides[agent.name];
-      const maxSteps = agentOverride?.maxSteps ?? DEFAULT_MAX_STEPS;
-
-      const result = await generateText({
-        model: modelId,
-        system: agent.systemPrompt,
-        prompt: delegationPrompt,
-        tools,
-        stopWhen: stepCountIs(maxSteps),
-        temperature: 0.1,
-        onStepFinish: (event) => {
-          if (event.usage) {
-            status.tokenUsage.input += event.usage.inputTokens ?? 0;
-            status.tokenUsage.output += event.usage.outputTokens ?? 0;
-          }
-          status.toolCallCount += (event.toolCalls?.length ?? 0);
-          onStatusChange(status);
-        },
-      });
-
-      if (!result.text || result.text.trim().length === 0) {
-        throw new Error('Empty response from model');
+      // Check compatibility for CLI providers
+      if (adapter.type === 'cli') {
+        const compat = adapter.checkCompatibility(agent, config);
+        if (compat.status === 'skipped') {
+          throw new Error(`Agent ${agent.name} incompatible with ${provider}: ${compat.skipReason}`);
+        }
       }
 
-      // Check for truncation / context overflow
-      if (result.finishReason === 'length') {
-        process.stderr.write(
-          `  WARNING: ${agent.name} hit context window limit (finishReason=length). Output may be truncated.\n`,
-        );
-      }
-
-      // Track file coverage from tool call log
-      const filesRead = new Set(
-        toolCallLog
-          .filter(t => t.tool === 'Read')
-          .map(t => t.args.file_path as string)
-          .filter(Boolean),
+      const result = await adapter.run(
+        agent, delegationPrompt, config, status, onStatusChange, onFallback,
       );
-      status.coveragePercent = null; // Caller sets this based on chunk assignment
 
-      return {
-        text: result.text,
-        usage: {
-          inputTokens: result.usage.inputTokens ?? 0,
-          outputTokens: result.usage.outputTokens ?? 0,
-        },
-        steps: result.steps.map(s => ({
-          toolCalls: s.toolCalls.map(tc => ({ toolName: tc.toolName })),
-          toolResults: s.toolResults.map(tr => ({ toolName: tr.toolName })),
-        })),
-        finishReason: result.finishReason,
-        provider,
-        model: modelName,
-      };
+      return result;
     } catch (err: unknown) {
       lastError = err instanceof Error ? err : new Error(String(err));
       status.retryCount++;
@@ -149,7 +77,8 @@ export async function runAgent(
         : 'unknown';
 
       if (isAuthError(err)) {
-        config.modelsConfig.providers[provider].enabled = false;
+        const providerConfig = config.modelsConfig.providers[provider];
+        if (providerConfig) providerConfig.enabled = false;
       }
 
       const nextIdx = fallbackChain.findIndex(f => f.provider === provider) + 1;
@@ -172,4 +101,34 @@ export async function runAgent(
   status.error = lastError?.message ?? 'All providers exhausted';
   onStatusChange(status);
   throw new Error(`Agent ${agent.name} failed on all providers: ${lastError?.message}`);
+}
+
+// --- Helpers ---
+
+const API_PROVIDER_NAMES = new Set(['xai', 'google', 'anthropic']);
+
+function buildFallbackChain(
+  preferredProvider: ProviderName,
+  preferredModel: string,
+  agent: AgentDefinition,
+  config: OrchestrationConfig,
+): Array<{ provider: ProviderName; model: string }> {
+  const chain = [{ provider: preferredProvider, model: preferredModel }];
+
+  for (const p of config.modelsConfig.fallbackChain) {
+    if (p === preferredProvider) continue;
+    const pConfig = config.modelsConfig.providers[p];
+    if (!pConfig?.enabled) continue;
+
+    if (isCliProvider(pConfig)) {
+      chain.push({ provider: p, model: pConfig.binary });
+    } else if (API_PROVIDER_NAMES.has(p)) {
+      chain.push({
+        provider: p,
+        model: config.modelsConfig.tiers[agent.tier][p as 'xai' | 'google' | 'anthropic'],
+      });
+    }
+  }
+
+  return chain;
 }

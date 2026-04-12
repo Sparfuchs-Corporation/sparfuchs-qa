@@ -2,10 +2,13 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { generateText } from 'ai';
 import type {
   AgentRunResult, AgentRunStatus, QualityAuditResult, QualityIssue,
-  ModelsYaml, ProviderName, OrchestrationConfig,
+  ModelsYaml, ProviderName, ApiProviderName, OrchestrationConfig,
 } from './types.js';
+import { isApiProvider } from './types.js';
 import type { QaFinding } from '../types.js';
-import { toModelId } from './agent-runner.js';
+import { toModelId } from './adapters/api-adapter.js';
+
+const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic']);
 
 // --- Deterministic Checks ---
 
@@ -112,13 +115,14 @@ async function semanticAudit(
   agentProvider: ProviderName,
 ): Promise<{ issue: QualityIssue | null; auditProvider: ProviderName | undefined }> {
   // Pick a DIFFERENT provider
+  // Quality audit requires an API provider (calls generateText directly)
   const auditProvider = config.fallbackChain.find(
-    p => p !== agentProvider && config.providers[p]?.enabled,
+    p => p !== agentProvider && config.providers[p]?.enabled && API_PROVIDER_NAMES.has(p),
   );
   if (!auditProvider) return { issue: null, auditProvider: undefined };
 
   try {
-    const modelId = toModelId(auditProvider, config.tiers.light[auditProvider]);
+    const modelId = toModelId(auditProvider as ApiProviderName, config.tiers.light[auditProvider as ApiProviderName]);
     const audit = await generateText({
       model: modelId,
       prompt:

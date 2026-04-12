@@ -1,7 +1,8 @@
-# QA Platform Architecture
+# QA Platform Architecture — Sparfuchs QA
 
-System design for The Forge QA Platform. This document covers the deployment
-pipeline, test generation flow, Firestore schema, and anti-hallucination layers.
+System design for the Sparfuchs QA Platform. This document covers the deployment
+pipeline, test generation flow, Firestore schema, anti-hallucination layers,
+local orchestration, multi-LLM agent execution, and credential management.
 
 ---
 
@@ -80,6 +81,108 @@ touches the main Forge Firestore collections.
 
 ---
 
+## Local Architecture
+
+The sparfuchs-qa codebase provides a comprehensive local QA execution layer
+with multi-LLM orchestration, credential management, and observability.
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| Canary Runner | `canaries/index.ts` | Loads and runs all `*.canary.ts` files, optionally pushes to Firestore |
+| Orchestrator | `lib/orchestrator/` | Multi-LLM agent execution engine with integrity validation |
+| Agent Parser | `lib/orchestrator/agent-parser.ts` | Parses `.claude/agents/*.md` files, validates syntax, generates content hashes |
+| Agent Runner | `lib/orchestrator/agent-runner.ts` | Executes a single agent with model resolution, retries, and fallbacks |
+| Config Loader | `lib/orchestrator/config.ts` | Loads models.yaml, resolves provider keys, enforces data classification |
+| Credential Store | `lib/orchestrator/credential-store.ts` | OS keychain integration for encrypted API key storage |
+| Observability | `lib/orchestrator/observability.ts` | Tracks agent execution metrics (duration, tokens, tool calls, errors) |
+| Quality Auditor | `lib/orchestrator/quality-auditor.ts` | Post-run validation (finding counts, severity distribution, hallucination risk) |
+| Credential Manager | `lib/credentials/credential-manager.ts` | Loads and validates credentials from env var `SPARFUCHS_CRED_FILE` |
+| Setup Wizard | `lib/credentials/setup-wizard.ts` | Interactive credential setup (5 auth strategies) |
+| Findings Manager | `scripts/qa-findings-manager.ts` | Persistent finding registry with lifecycle states (open → remediated → verified → closed) in JSONL format |
+| Flaky Test Tracker | `scripts/flaky-test-tracker.ts` | Detects flaky tests (candidate at 2 flips, confirmed at 5 flips) |
+| Delta Reporter | `scripts/qa-delta-report.ts` | Compares findings across runs (new/fixed/regressed) |
+| Evolution Engine | `scripts/qa-evolve-v2.ts` | Analyzes finding patterns, suggests threshold evolution |
+| File Audit Cache | `scripts/file-audit-cache.ts` | Incremental auditing — tracks which files audited at which commit |
+| Package Verifier | `scripts/package-verify.ts` | SBOM generation + provenance attestation checking |
+
+---
+
+## Multi-LLM Orchestration
+
+The orchestrator enables seamless execution across three AI providers with
+configurable model tiers and data-classification-aware routing.
+
+**Providers:**
+- `xai` — Grok
+- `google` — Gemini
+- `anthropic` — Claude
+
+**Model Tiers:**
+- `heavy` — Complex reasoning (prompts >5K tokens)
+- `mid` — General analysis
+- `light` — Quick checks and classification
+
+**Data Classification:**
+Each provider is assigned a data classification level (`public`, `internal`,
+`restricted`), enforced at agent execution time to prevent sensitive data
+leakage to untrusted providers.
+
+**Integrity Validation:**
+Agent integrity is verified via content hashes stored in `config/agent-hashes.json`.
+On load, each agent's SHA-256 hash is compared to the stored value. Token usage
+is tracked per agent via the ObservabilityTracker.
+
+---
+
+## Credential System
+
+The credential system supports five authentication strategies with secure storage
+and automatic cleanup.
+
+**Auth Strategies** (in `lib/credentials/strategies/`):
+- Email + Password — Firebase sign-in
+- API Token — Bearer token
+- OAuth Token — Third-party OAuth flow
+- Basic Auth — Base64-encoded credentials
+- None — Public APIs
+
+**Credential Flow:**
+1. Setup wizard prompts for auth method
+2. Credentials written to temp file in `/tmp` (mode 0600)
+3. Agents read via env var `SPARFUCHS_CRED_FILE`
+4. Auto-deleted on cleanup or session exit
+
+**API Key Storage:**
+Multi-LLM provider keys (xai, google, anthropic) are stored in the OS keychain:
+- **macOS:** `security` framework
+- **Linux:** `secret-tool` CLI
+
+Keys are loaded by `credential-store.ts` at agent execution time.
+
+---
+
+## Finding Lifecycle
+
+Findings are tracked in persistent JSONL format via `qa-findings-manager.ts`
+and move through a multi-stage lifecycle.
+
+```
+open → recurring → remediated → verified → closed
+                                        → wont-fix
+                                        → stale
+```
+
+**States:**
+- `open` — Newly detected
+- `recurring` — Appears in multiple runs
+- `remediated` — Developer has implemented a fix
+- `verified` — Fix has been validated
+- `closed` — Finding is resolved
+- `wont-fix` — Intentionally not addressed
+- `stale` — No longer relevant
+
+---
+
 ## Firestore Collections
 
 ### `qa_findings`
@@ -147,6 +250,20 @@ ai_baselines/{baselineId}
   ├── goldenResponse: string | null
   ├── category: string
   └── createdAt: Timestamp
+```
+
+### `qa_flaky_tests`
+
+Flaky test tracking with state progression. Tests are marked as candidates
+after 2 flip events and confirmed after 5 flips.
+
+```
+qa_flaky_tests/{testId}
+  ├── testName: string
+  ├── flipCount: number        // 2 = candidate, 5 = confirmed
+  ├── status: 'candidate' | 'confirmed'
+  ├── lastFlipAt: Timestamp
+  └── history: array           // recent pass/fail results
 ```
 
 ---

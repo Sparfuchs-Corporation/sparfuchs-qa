@@ -3,18 +3,97 @@ import type { QaFinding } from '../types.js';
 // --- Provider & Model ---
 
 export type ModelTier = 'heavy' | 'mid' | 'light';
-export type ProviderName = 'xai' | 'google' | 'anthropic';
+export type ApiProviderName = 'xai' | 'google' | 'anthropic';
+export type CliProviderName = 'claude-cli' | 'gemini-cli' | 'codex-cli' | 'openclaw';
+export type ProviderName = ApiProviderName | CliProviderName;
+export type ProviderType = 'api' | 'cli';
 export type DataClassification = 'public' | 'internal' | 'restricted';
 
-export interface ProviderConfig {
+export interface ApiProviderConfig {
+  type: 'api';
   enabled: boolean;
   apiKeyEnvVar: string;
+}
+
+export interface CliProviderConfig {
+  type: 'cli';
+  enabled: boolean;
+  binary: string;
+  detectedPath?: string;
+  detectedVersion?: string;
+}
+
+export type ProviderConfig = ApiProviderConfig | CliProviderConfig;
+
+export function isApiProvider(config: ProviderConfig): config is ApiProviderConfig {
+  return config.type === 'api';
+}
+
+export function isCliProvider(config: ProviderConfig): config is CliProviderConfig {
+  return config.type === 'cli';
 }
 
 export interface TierModels {
   xai: string;
   google: string;
   anthropic: string;
+}
+
+// --- Adapter Capabilities ---
+
+export interface AdapterCapabilities {
+  systemPromptFile: boolean;
+  addDir: boolean;
+  agentDeployment: boolean;
+  toolLogging: boolean;
+  toolControl: boolean;
+}
+
+export interface AgentCliCompatibility {
+  agentName: string;
+  status: 'full' | 'adapted' | 'skipped';
+  adaptations: string[];
+  skipReason?: string;
+}
+
+export interface DetectionResult {
+  installed: boolean;
+  path?: string;
+  version?: string;
+}
+
+// --- Token Budget ---
+
+export interface TokenBudgetPresets {
+  full: 'all' | string[];
+  standard: string[];
+  lite: string[];
+}
+
+export interface TokenPricing {
+  xai: number;
+  google: number;
+  anthropic: number;
+}
+
+export interface TokenBudgetConfig {
+  presets: TokenBudgetPresets;
+  pricing: TokenPricing;
+  defaultCap: number;
+}
+
+export interface TokenBudget {
+  cap: number;
+  used: number;
+  preset: 'full' | 'standard' | 'lite' | 'custom';
+  agentSet: string[];
+}
+
+export interface TokenEstimate {
+  agentCount: number;
+  estimatedTokens: number;
+  costByProvider: Record<string, number>;
+  isCliProvider: boolean;
 }
 
 export interface AgentOverride {
@@ -29,10 +108,11 @@ export interface ModelsYaml {
   dataClassification: DataClassification;
   redactSecrets: boolean;
   approvedProviders?: ProviderName[];
-  providers: Record<ProviderName, ProviderConfig>;
+  providers: Record<string, ProviderConfig>;
   fallbackChain: ProviderName[];
   tiers: Record<ModelTier, TierModels>;
   agentOverrides: Record<string, AgentOverride>;
+  tokenBudget?: TokenBudgetConfig;
 }
 
 // --- Agent ---
@@ -132,6 +212,11 @@ export type KeychainPlatform = 'macos' | 'windows' | 'linux' | 'unknown';
 export interface CredentialResult {
   value: string;
   source: 'keychain' | 'env';
+}
+
+export interface TestProfileResult {
+  profileName: string;
+  source: 'keychain';
 }
 
 // --- Observability ---
