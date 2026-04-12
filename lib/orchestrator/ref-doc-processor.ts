@@ -2,8 +2,11 @@ import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join, extname, basename } from 'node:path';
 import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
-import type { DocClaim, DocClaimType, ModelsYaml } from './types.js';
-import { toModelId } from './agent-runner.js';
+import type { DocClaim, DocClaimType, ModelsYaml, ApiProviderName } from './types.js';
+import { isApiProvider } from './types.js';
+import { toModelId } from './adapters/api-adapter.js';
+
+const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic']);
 
 const MAX_CHUNK_CHARS = 30_000;
 const OVERLAP_CHARS = 2_000;
@@ -172,9 +175,16 @@ async function extractClaimsFromChunk(
   chunkLabel: string,
   modelsConfig: ModelsYaml,
 ): Promise<DocClaim[]> {
-  const provider = modelsConfig.defaultProvider;
-  const modelName = modelsConfig.tiers.mid[provider];
-  const modelId = toModelId(provider, modelName);
+  // Ref-doc extraction requires an API provider (calls generateText directly)
+  let provider = modelsConfig.defaultProvider;
+  if (!API_PROVIDER_NAMES.has(provider)) {
+    const fallback = modelsConfig.fallbackChain.find(p => API_PROVIDER_NAMES.has(p) && modelsConfig.providers[p]?.enabled);
+    if (!fallback) throw new Error('No API provider available for ref-doc claim extraction');
+    provider = fallback;
+  }
+  const apiProvider = provider as ApiProviderName;
+  const modelName = modelsConfig.tiers.mid[apiProvider];
+  const modelId = toModelId(apiProvider, modelName);
 
   const prompt = `Extract every verifiable factual claim from this document. For each claim, output a JSON object on its own line (JSONL format).
 

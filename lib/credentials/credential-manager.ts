@@ -1,33 +1,61 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { resolveStrategy } from './strategies/base.js';
+import { loadTestProfile } from '../orchestrator/credential-store.js';
 import type { CredentialFile, AuthHeader } from './strategies/base.js';
 
-const CRED_ENV_VAR = 'SPARFUCHS_CRED_FILE';
+const CRED_FILE_ENV = 'SPARFUCHS_CRED_FILE';
+const CRED_PROFILE_ENV = 'SPARFUCHS_CRED_PROFILE';
 const CURRENT_VERSION = 1;
 
+export function getCredentialSource(): 'keychain' | 'file' | null {
+  if (process.env[CRED_PROFILE_ENV]) return 'keychain';
+  const path = process.env[CRED_FILE_ENV];
+  if (path && existsSync(path)) return 'file';
+  return null;
+}
+
 export function getCredentialPath(): string | null {
-  return process.env[CRED_ENV_VAR] ?? null;
+  return process.env[CRED_FILE_ENV] ?? null;
+}
+
+export function getCredentialProfile(): string | null {
+  return process.env[CRED_PROFILE_ENV] ?? null;
 }
 
 export function hasCredentials(): boolean {
-  const path = getCredentialPath();
-  return path !== null && existsSync(path);
+  return getCredentialSource() !== null;
 }
 
 export function loadCredentials(): CredentialFile | null {
-  const path = getCredentialPath();
-  if (!path || !existsSync(path)) return null;
+  const source = getCredentialSource();
 
-  const raw = readFileSync(path, 'utf-8');
-  const parsed = JSON.parse(raw) as CredentialFile;
-
-  if (parsed.version !== CURRENT_VERSION) {
-    throw new Error(
-      `Credential file version ${parsed.version} is not supported (expected ${CURRENT_VERSION})`,
-    );
+  if (source === 'keychain') {
+    const profileName = process.env[CRED_PROFILE_ENV]!;
+    const profile = loadTestProfile(profileName);
+    if (!profile) {
+      throw new Error(`Credential profile "${profileName}" not found in OS keychain`);
+    }
+    if (profile.version !== CURRENT_VERSION) {
+      throw new Error(
+        `Credential profile version ${profile.version} is not supported (expected ${CURRENT_VERSION})`,
+      );
+    }
+    return profile;
   }
 
-  return parsed;
+  if (source === 'file') {
+    const path = process.env[CRED_FILE_ENV]!;
+    const raw = readFileSync(path, 'utf-8');
+    const parsed = JSON.parse(raw) as CredentialFile;
+    if (parsed.version !== CURRENT_VERSION) {
+      throw new Error(
+        `Credential file version ${parsed.version} is not supported (expected ${CURRENT_VERSION})`,
+      );
+    }
+    return parsed;
+  }
+
+  return null;
 }
 
 export async function getAuthHeader(): Promise<AuthHeader | null> {

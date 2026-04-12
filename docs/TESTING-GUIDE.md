@@ -1,4 +1,4 @@
-# Testing Guide — The Forge
+# Testing Guide — Sparfuchs QA
 
 Detailed reference for every test type in the QA Platform pipeline.
 For a quick-start walkthrough, see [QA-ONBOARDING.md](./QA-ONBOARDING.md).
@@ -7,7 +7,7 @@ For a quick-start walkthrough, see [QA-ONBOARDING.md](./QA-ONBOARDING.md).
 
 ## Test Types Overview
 
-The Forge uses four layers of tests, ordered from fastest to most comprehensive.
+Sparfuchs QA uses four layers of tests, ordered from fastest to most comprehensive.
 
 ### 1. Canaries
 
@@ -132,6 +132,43 @@ considered stable.
 
 ---
 
+## Sparfuchs QA Canaries
+
+The sparfuchs-qa repo includes 15 canaries under `canaries/` that check code quality of any target repository. These are distinct from The Forge canaries above.
+
+| # | Canary | Type | What It Checks |
+|---|--------|------|----------------|
+| 1 | `ai-decay` | ai-quality | AI baselines seed data exists |
+| 2 | `bdd-smoke` | test-infrastructure | playwright.config.ts present; counts BDD feature files |
+| 3 | `console-error-leak` | logging | Counts console.error calls in source (threshold: 20) |
+| 4 | `coverage-hole` | code-quality | Detects zero-coverage files from coverage-final.json |
+| 5 | `environment-parity` | configuration | Validates required keys in environment config |
+| 6 | `hardcoded-credential` | security | Searches for hardcoded API_KEY, SECRET, PASSWORD, TOKEN (critical: threshold 0) |
+| 7 | `i18n-missing-key` | i18n | Detects untranslated strings in source code |
+| 8 | `mock-data-leak` | testing | Detects mock data accidentally in production paths |
+| 9 | `performance-regression` | performance | Detects performance regressions via git history comparison |
+| 10 | `qa-self-audit` | qa-infrastructure | Validates sparfuchs-qa's own canary count |
+| 11 | `rbac-bypass` | security | Scans for unprotected routes; checks role hierarchy |
+| 12 | `silent-error-swallow` | error-handling | Detects bare catch blocks without error handling |
+| 13 | `stale-closure` | code-quality | Detects stale/leaked closure variables |
+| 14 | `todo-density` | code-quality | Counts TODO/FIXME/HACK markers (threshold: 50) |
+| 15 | `README` | docs | Canary directory documentation |
+
+**Run sparfuchs-qa canaries:**
+```bash
+make qa-quick     # stdout only
+make qa-push      # + push to Firestore
+```
+
+Each canary returns a rich result object:
+```typescript
+{ pass, severity, hint, value, threshold, trend }
+```
+
+Canaries are auto-loaded from any `*.canary.ts` file in `canaries/`.
+
+---
+
 ## Platform Test Lifecycle
 
 Platform-generated tests move through four stages:
@@ -186,11 +223,19 @@ Baseline categories:
 
 ### Canary conventions
 
+**Forge canaries** (in `tests/platform/canaries/`):
 - One file per canary: `tests/platform/canaries/<name>.canary.ts`
 - Export a default async function returning `{ pass: boolean; detail?: string }`
 - Keep execution under 500ms — canaries must be fast
 - No network calls to external services (Firebase emulator is OK)
 - Register the file in `tests/platform/canaries/index.ts`
+
+**Sparfuchs-qa canaries** (in `canaries/`):
+- One file per canary: `canaries/<name>.canary.ts`
+- Export a default async function returning `{ pass, severity, hint, value, threshold, trend }`
+- Keep execution under 500ms — canaries must be fast
+- No network calls to external services
+- Auto-loaded from any `*.canary.ts` file; no manual registration needed
 
 ### BDD conventions
 
@@ -205,6 +250,56 @@ Baseline categories:
 - Or use a `tests/` directory at the package root
 - Use Vitest (not Jest) — the repo is configured for Vitest
 - Mock Firestore and Firebase Auth — do not hit real services
+
+---
+
+## Flaky Test Tracking
+
+The system automatically detects flaky tests by comparing current vs historical results. Tests become candidates for flakiness after 2 flips and are confirmed flaky after 5 flips.
+
+Flaky test data lives in the `qa_flaky_tests` Firestore collection.
+
+**Track and report flaky tests:**
+```bash
+make qa-flaky           # report flaky tests
+npm run qa:flaky-track  # track flaky tests
+```
+
+---
+
+## Supply Chain Analysis (SCA)
+
+Package verification checks provenance attestations and generates CycloneDX-lite Software Bill of Materials (SBOMs).
+
+**Run SCA checks:**
+```bash
+make qa-sca        # full SCA check
+make qa-verify     # dry-run (no writes)
+make qa-sca-push   # SCA + push results
+```
+
+---
+
+## Delta Reports
+
+Compare QA findings across runs to see what's new, fixed, or regressed.
+
+**Generate delta report:**
+```bash
+make qa-delta PROJECT=my-app
+```
+
+---
+
+## Evolution Analysis
+
+Analyzes canary history over the last 30 days. Suggests threshold tightening for stable canaries and identifies those needing investigation.
+
+**Run evolution analysis:**
+```bash
+make qa-evolve           # Firestore-based
+make qa-evolve-v2 PROJECT=my-app  # local qa-data/ based
+```
 
 ---
 

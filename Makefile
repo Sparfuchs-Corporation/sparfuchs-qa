@@ -93,5 +93,13 @@ qa-keys-setup:
 	@echo "  echo 'your-key' | secret-tool store --label=sparfuchs-qa service sparfuchs-qa key XAI_API_KEY"
 	@echo ""
 	@echo "Or set environment variables: export XAI_API_KEY=your-key"
+qa-creds-list:
+	@npx tsx scripts/qa-creds-manage.ts list
+qa-creds-store:
+	@npx tsx scripts/qa-creds-manage.ts store --name "$(NAME)"
+qa-creds-show:
+	@npx tsx scripts/qa-creds-manage.ts show --name "$(NAME)"
+qa-creds-delete:
+	@npx tsx scripts/qa-creds-manage.ts delete --name "$(NAME)"
 qa-hashes-update:
 	@npx tsx -e "import{parsePhase1Agents,generateAgentHashes}from'./lib/orchestrator/agent-parser.js';import{writeFileSync}from'fs';const a=parsePhase1Agents('.claude/agents',{});writeFileSync('config/agent-hashes.json',JSON.stringify(generateAgentHashes(a),null,2));console.log('Updated config/agent-hashes.json')"

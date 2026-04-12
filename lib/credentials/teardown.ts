@@ -8,15 +8,22 @@ function isValidCredPath(filePath: string): boolean {
 }
 
 function main(): void {
+  // Check if credentials came from keychain — nothing to clean up
+  if (process.argv.includes('--source') && process.argv.includes('keychain')) {
+    console.log('Credentials loaded from keychain \u2014 no temp file to clean up.');
+    return;
+  }
+
   const filePath = process.argv[2];
 
   if (!filePath) {
     console.error('Usage: npx tsx lib/credentials/teardown.ts <credential-file-path>');
+    console.error('       npx tsx lib/credentials/teardown.ts --source keychain');
     process.exit(1);
   }
 
   if (!isValidCredPath(filePath)) {
-    console.error(`Refusing to delete "${filePath}" — path must be /tmp/${SAFE_PREFIX}*`);
+    console.error(`Refusing to delete "${filePath}" \u2014 path must be /tmp/${SAFE_PREFIX}*`);
     process.exit(1);
   }
 

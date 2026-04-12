@@ -1,36 +1,63 @@
-# Sparfuchs-QA v4.0 — Multi-LLM Orchestration Config
+# Sparfuchs-QA v5.0 — Multi-Engine Orchestration Config
+#
+# Supports two provider types:
+#   api — calls LLM model APIs via Vercel AI SDK (requires API keys)
+#   cli — invokes local AI CLI tools (no API keys needed, auto-detected)
 #
 # Tier mapping from agent frontmatter:
 #   opus   -> heavy (deep analysis, synthesis, security)
 #   sonnet -> mid   (standard review, code quality)
 #   haiku  -> light (simple checks, doc review, fixture gen)
 #
-# Grok is the recommended default provider for honesty-critical agents.
-# All settings are configurable per-user and per-agent.
+# Grok is the recommended default API provider for honesty-critical agents.
+# CLI providers are auto-detected from PATH and used as fallback when API keys are unavailable.
 
 defaultProvider: xai
 
 # --- Security ---
 # public     = any enabled provider can receive repo data
 # internal   = only providers on your org-approved list (configure approvedProviders below)
-# restricted = orchestrated engine disabled, Claude CLI only (no data to external APIs)
+# restricted = API providers disabled (no data to external APIs), CLI providers still allowed
 dataClassification: public
 redactSecrets: true
 # approvedProviders: [anthropic]   # uncomment for 'internal' classification
 
 providers:
+  # --- API providers (require API keys) ---
   xai:
+    type: api
     enabled: true
     apiKeyEnvVar: XAI_API_KEY
   google:
+    type: api
     enabled: true
     apiKeyEnvVar: GOOGLE_GENERATIVE_AI_API_KEY
   anthropic:
+    type: api
     enabled: true
     apiKeyEnvVar: ANTHROPIC_API_KEY
-  # openai: deferred to Phase 2
 
-fallbackChain: [xai, google, anthropic]
+  # --- CLI providers (auto-detected from PATH, no API keys needed) ---
+  claude-cli:
+    type: cli
+    enabled: auto
+    binary: claude
+  gemini-cli:
+    type: cli
+    enabled: auto
+    binary: gemini
+  codex-cli:
+    type: cli
+    enabled: auto
+    binary: codex
+  openclaw:
+    type: cli
+    enabled: auto
+    binary: openclaw
+
+# Fallback chain — can mix API and CLI providers
+# API providers tried first (full tool control), then CLI fallbacks
+fallbackChain: [xai, google, anthropic, claude-cli, gemini-cli]
 
 tiers:
   heavy:
@@ -67,3 +94,47 @@ agentOverrides:
   ref-doc-verifier:
     provider: xai
     maxSteps: 100       # verifying many claims against codebase
+
+# --- Token Budget ---
+# Controls cost estimation and budget presets.
+# CLI providers manage billing through their own accounts — shown as informational.
+tokenBudget:
+  presets:
+    full: all
+    standard:
+      - build-verifier
+      - semantic-diff-reviewer
+      - code-reviewer
+      - security-reviewer
+      - performance-reviewer
+      - risk-analyzer
+      - deploy-readiness-reviewer
+      - contract-reviewer
+      - rbac-reviewer
+      - access-query-validator
+      - permission-chain-checker
+      - a11y-reviewer
+      - compliance-reviewer
+      - spec-verifier
+      - schema-migration-reviewer
+      - mock-integrity-checker
+      - test-runner
+      - failure-analyzer
+      - stub-detector
+      - release-gate-synthesizer
+    lite:
+      - build-verifier
+      - security-reviewer
+      - test-runner
+      - deploy-readiness-reviewer
+      - code-reviewer
+      - stub-detector
+      - failure-analyzer
+      - release-gate-synthesizer
+  # Cost per 1M tokens (USD) — display only, not enforced
+  pricing:
+    xai: 3.00
+    google: 1.25
+    anthropic: 15.00
+  # Default cap (0 = no limit)
+  defaultCap: 0

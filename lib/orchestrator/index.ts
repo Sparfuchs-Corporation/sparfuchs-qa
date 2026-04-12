@@ -2,6 +2,7 @@ import { join } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import * as readline from 'node:readline';
 import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
+import { isApiProvider } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
 import { parsePhase1Agents, validateAgentIntegrity } from './agent-parser.js';
 import { runAgent } from './agent-runner.js';
@@ -10,18 +11,67 @@ import { QualityAuditor } from './quality-auditor.js';
 import { parseFindingTags, appendFinding } from '../../scripts/qa-findings-manager.js';
 import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
 import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
+import {
+  registerAdapter, resolveCliProviders, printCapabilityReport, getAdapter,
+} from './adapters/index.js';
+import { estimateTokenCost, printBudgetPrompt, checkBudget, updateBudgetUsage, isAgentInBudget } from './token-budget.js';
+import type { TokenBudget } from './types.js';
+import { ApiAdapter } from './adapters/api-adapter.js';
+import { ClaudeCliAdapter } from './adapters/claude-cli-adapter.js';
+import { GeminiCliAdapter } from './adapters/gemini-cli-adapter.js';
+import { CodexCliAdapter } from './adapters/codex-cli-adapter.js';
+import { OpenClawAdapter } from './adapters/openclaw-adapter.js';
+
+// --- Register all adapters ---
+
+function initAdapters(): void {
+  // API adapters
+  registerAdapter(new ApiAdapter('xai'));
+  registerAdapter(new ApiAdapter('google'));
+  registerAdapter(new ApiAdapter('anthropic'));
+
+  // CLI adapters
+  registerAdapter(new ClaudeCliAdapter());
+  registerAdapter(new GeminiCliAdapter());
+  registerAdapter(new CodexCliAdapter());
+  registerAdapter(new OpenClawAdapter());
+}
 
 export async function runOrchestration(config: OrchestrationConfig): Promise<void> {
+  // 0. Initialize adapters
+  initAdapters();
+
   // 1. Load and validate config
   const modelsConfig = loadModelsConfig();
   config.modelsConfig = modelsConfig;
+
+  // 1.5. Auto-detect CLI providers
+  const cliDetection = resolveCliProviders(modelsConfig);
+  if (cliDetection.size > 0) {
+    process.stderr.write('\n--- CLI Detection ---\n');
+    for (const [name, result] of cliDetection) {
+      const status = result.installed
+        ? `found at ${result.path}${result.version ? ` (${result.version})` : ''}`
+        : 'not found';
+      process.stderr.write(`  ${name}: ${status}\n`);
+    }
+    process.stderr.write('\n');
+  }
+
+  // 2. Enforce data classification (now CLI-aware: restricted allows CLIs)
   enforceDataClassification(modelsConfig);
   const { available, disabled } = resolveProviderKeys(modelsConfig);
 
-  // 2. Consent prompt
-  await showConsentPrompt(available, config.repoPath);
+  // 3. Consent prompt — only for API providers
+  const apiProviders = available.filter(p => {
+    const cfg = modelsConfig.providers[p];
+    return cfg && isApiProvider(cfg);
+  });
+  if (apiProviders.length > 0) {
+    await showConsentPrompt(apiProviders, config.repoPath);
+  }
 
-  // 3. Parse agents and validate integrity
+  // 4. Parse agents and validate integrity
   const agentsDir = join(config.repoPath, '.claude', 'agents');
   const agents = parsePhase1Agents(agentsDir, modelsConfig.agentOverrides);
   const hashesPath = join(config.sparfuchsRoot, 'config', 'agent-hashes.json');
@@ -34,7 +84,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     process.stderr.write('Run "make qa-hashes-update" to update after reviewing changes.\n\n');
   }
 
-  // 4. Initialize output directories
+  // 5. Initialize output directories
   mkdirSync(config.sessionLogDir, { recursive: true });
   const runDir = join(config.qaDataRoot, config.projectSlug, 'runs', config.runId);
   mkdirSync(runDir, { recursive: true });
@@ -42,19 +92,17 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const findingsPath = join(runDir, 'findings.jsonl');
   writeFileSync(findingsPath, '');
 
-  // 2.5. Testability pre-flight scan
+  // 5.5. Testability pre-flight scan
   const testabilityReport = await scanTestability(config.repoPath, config.moduleScope);
   writeTestabilityReport(testabilityReport, runDir);
   printTestabilitySummary(testabilityReport);
 
-  // Build set of agents to skip based on testability predictions
   const agentsToSkip = new Set(
     testabilityReport.agentPredictions
       .filter(p => !p.effective)
       .map(p => p.agentName),
   );
 
-  // Build excluded files set from uncheckable report
   const excludedFileSet = new Set([
     ...testabilityReport.uncheckable.minifiedFiles,
     ...testabilityReport.uncheckable.generatedFiles,
@@ -62,17 +110,53 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     ...testabilityReport.uncheckable.largeFiles,
   ]);
 
-  // 4.5. Large codebase chunking
+  // 6. Large codebase chunking
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
   const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet]);
 
-  // 5. Print run header
-  process.stderr.write('\n=== Sparfuchs QA Review (orchestrated engine) ===\n');
-  process.stderr.write(`Providers: ${available.join(', ')}`);
-  if (disabled.length > 0) {
-    process.stderr.write(` | Disabled: ${disabled.join('; ')}`);
+  // 6.5. Capability report for the primary provider
+  const primaryProvider = available[0];
+  if (primaryProvider) {
+    const primaryAdapter = getAdapter(primaryProvider);
+    if (primaryAdapter.type === 'cli') {
+      printCapabilityReport(primaryProvider, agents, config);
+
+      // Collect CLI-incompatible agents for skip
+      for (const agent of agents) {
+        const compat = primaryAdapter.checkCompatibility(agent, config);
+        if (compat.status === 'skipped') {
+          agentsToSkip.add(agent.name);
+        }
+      }
+    }
   }
-  process.stderr.write('\n');
+
+  // 7. Token budget prompt
+  const estimate = estimateTokenCost(agents, modelsConfig, primaryProvider);
+  const budget = await printBudgetPrompt(estimate, agents, modelsConfig);
+
+  // Filter agents by budget preset
+  const budgetAgentSet = new Set(budget.agentSet);
+  for (const agent of agents) {
+    if (!isAgentInBudget(agent.name, budget)) {
+      agentsToSkip.add(agent.name);
+    }
+  }
+
+  // 8. Print run header
+  const apiAvail = available.filter(p => isApiProvider(config.modelsConfig.providers[p]));
+  const cliAvail = available.filter(p => !isApiProvider(config.modelsConfig.providers[p]));
+
+  process.stderr.write('\n=== Sparfuchs QA Review (orchestrated engine) ===\n');
+  if (apiAvail.length > 0) {
+    process.stderr.write(`API providers: ${apiAvail.join(', ')}\n`);
+  }
+  if (cliAvail.length > 0) {
+    process.stderr.write(`CLI providers: ${cliAvail.join(', ')}\n`);
+  }
+  if (disabled.length > 0) {
+    process.stderr.write(`Disabled: ${disabled.join('; ')}\n`);
+  }
   process.stderr.write(`Agents: ${agents.length} | Mode: ${config.mode} | Repo: ${config.repoPath}\n`);
   process.stderr.write(`Classification: ${modelsConfig.dataClassification} | Redact secrets: ${modelsConfig.redactSecrets}\n`);
   if (config.moduleScope) {
@@ -82,26 +166,25 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     process.stderr.write(`\n## Chunking\n${formatChunkPlanSummary(chunkPlan)}\n`);
   }
   if (agentsToSkip.size > 0) {
-    process.stderr.write(`Skipping ineffective agents: ${[...agentsToSkip].join(', ')}\n`);
+    process.stderr.write(`Skipping agents: ${[...agentsToSkip].join(', ')}\n`);
   }
 
-  // 6. Run agents (with chunking support)
+  // 8. Run agents (with chunking support)
   const observer = new ObservabilityTracker();
+  observer.setBudget(budget);
   const auditor = new QualityAuditor(config, modelsConfig);
 
   for (const agent of agents) {
-    // Skip agents predicted as ineffective
     if (agentsToSkip.has(agent.name)) {
       const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
       const status = observer.registerAgent(agent.name);
       status.status = 'complete';
-      status.error = `Skipped: ${prediction?.reason ?? 'predicted ineffective'}`;
+      status.error = `Skipped: ${prediction?.reason ?? 'predicted ineffective or CLI-incompatible'}`;
       status.completedAt = new Date().toISOString();
-      process.stderr.write(`\n--- Skipping ${agent.name}: ${prediction?.reason} ---\n`);
+      process.stderr.write(`\n--- Skipping ${agent.name}: ${status.error} ---\n`);
       continue;
     }
 
-    // Determine if this agent should be chunked
     const shouldChunk = chunkPlan && isChunkedAgent(agent.name);
     const chunks = shouldChunk ? chunkPlan.chunks : [null];
 
@@ -112,7 +195,6 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
       const status = observer.registerAgent(agentLabel);
 
-      // Resolve model info for display
       const resolved = resolveModelForAgent(
         agent.name, agent.tier, modelsConfig, config.providerOverride,
       );
@@ -124,17 +206,12 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       try {
         let delegationPrompt = buildDelegationPrompt(agent, config);
 
-        // Append chunk-specific file list
         if (chunk && chunkPlan) {
           delegationPrompt += buildChunkPromptSuffix(chunk, chunkPlan.chunks.length, config.repoPath);
         }
-
-        // Append module scope
         if (config.moduleScope) {
           delegationPrompt += `\nTarget module: ${config.moduleScope}. Only analyze files under this directory.\n`;
         }
-
-        // Inject claims manifest for ref-doc-aware agents
         if (config.claimsManifestPath && REFDOC_AWARE_AGENTS.has(agent.name)) {
           delegationPrompt += buildRefDocPromptSuffix(config.claimsManifestPath);
         }
@@ -145,14 +222,12 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
           (e) => observer.recordFallback(e),
         );
 
-        // Write agent output to session log
         const outputPath = join(config.sessionLogDir, `${formatTime()}_${agentLabel}.md`);
         writeFileSync(outputPath, result.text);
         status.outputFilePath = outputPath;
         status.outputFileExists = true;
         status.outputSizeBytes = Buffer.byteLength(result.text);
 
-        // Track coverage for chunked agents
         if (chunk) {
           const filesInOutput = new Set<string>();
           for (const file of chunk.files) {
@@ -163,7 +238,6 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
           status.coveragePercent = Math.round((filesInOutput.size / chunk.files.length) * 100);
         }
 
-        // Extract and stream findings
         const findings = parseFindingTags(result.text, agent.name);
         for (const finding of findings) {
           appendFinding(config.projectSlug, config.runId, finding);
@@ -171,7 +245,18 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
         observer.completeAgent(agentLabel, findings.length, status.outputSizeBytes);
 
-        // Quality audit
+        // Track budget
+        const agentTokens = status.tokenUsage.input + status.tokenUsage.output;
+        updateBudgetUsage(budget, agentTokens);
+        const budgetCheck = checkBudget(budget, 0);
+        if (budgetCheck.warning) {
+          process.stderr.write(`  BUDGET: ${budgetCheck.warning}\n`);
+        }
+        if (!budgetCheck.ok) {
+          process.stderr.write('  Token budget exceeded — stopping remaining agents.\n');
+          break;
+        }
+
         const auditResult = await auditor.check(agentLabel, result, findings, status);
         if (!auditResult.passed) {
           process.stderr.write(
@@ -185,11 +270,11 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     }
   }
 
-  // 7. Write quality audit results
+  // 9. Write quality audit results
   const auditPath = join(runDir, 'quality-audit.json');
   auditor.writeResults(auditPath);
 
-  // 8. Write run meta
+  // 10. Write run meta
   const metaPath = join(runDir, 'meta.json');
   writeFileSync(metaPath, JSON.stringify({
     runId: config.runId,
@@ -200,6 +285,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     moduleScope: config.moduleScope ?? null,
     startedAt: new Date().toISOString(),
     dataClassification: modelsConfig.dataClassification,
+    providers: { api: apiAvail, cli: cliAvail, disabled },
     testability: {
       checkabilityScore: testabilityReport.uncheckable.checkabilityScore,
       totalSourceFiles: testabilityReport.repoProfile.totalSourceFiles,
@@ -217,7 +303,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     qualityAudit: auditor.getResults(),
   }, null, 2));
 
-  // 9. Print final summary
+  // 11. Print final summary
   observer.printFinalSummary();
 }
 
@@ -251,8 +337,9 @@ async function showConsentPrompt(providers: ProviderName[], repoPath: string): P
 
   process.stderr.write('\n*** DATA TRANSMISSION NOTICE ***\n');
   process.stderr.write(`The orchestrated engine will send code from:\n  ${repoPath}\n`);
-  process.stderr.write(`To these LLM providers: ${providers.join(', ')}\n`);
-  process.stderr.write('This includes file contents, grep results, and git diffs.\n\n');
+  process.stderr.write(`To these API providers: ${providers.join(', ')}\n`);
+  process.stderr.write('This includes file contents, grep results, and git diffs.\n');
+  process.stderr.write('(CLI providers keep all data local — no transmission.)\n\n');
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise<string>(resolve => {
@@ -261,7 +348,7 @@ async function showConsentPrompt(providers: ProviderName[], repoPath: string): P
   rl.close();
 
   if (answer.toLowerCase() !== 'yes') {
-    throw new Error('User declined data transmission. Use ENGINE=claude for local-only mode.');
+    throw new Error('User declined data transmission. Use ENGINE=claude for local-only mode, or use a CLI provider.');
   }
 
   mkdirSync(consentDir, { recursive: true });
@@ -279,7 +366,6 @@ function formatTime(): string {
     .join('-');
 }
 
-// Agents that should receive reference document claims context
 const REFDOC_AWARE_AGENTS = new Set([
   'ref-doc-verifier',
   'spec-verifier',

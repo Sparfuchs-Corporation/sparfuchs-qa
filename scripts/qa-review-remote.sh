@@ -85,6 +85,7 @@ JOURNEY=""
 TRAINING=""
 DOCS=""
 REF_DOCS=""
+CRED_PROFILE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -102,6 +103,7 @@ while [[ $# -gt 0 ]]; do
     --engine)    ENGINE="$2"; shift 2 ;;
     --provider)  PROVIDER="$2"; shift 2 ;;
     --ref-docs)  REF_DOCS="$2"; shift 2 ;;
+    --profile)   CRED_PROFILE="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -122,10 +124,19 @@ else
   # TRAINING and DOCS become additive flags passed in the prompt
 fi
 
+# --- Interactive prompts for missing values ---
 if [[ -z "$REPO" ]]; then
-  echo "Error: --repo is required" >&2
-  echo "Usage: bash scripts/qa-review-remote.sh --repo /path/to/target [--full]" >&2
-  exit 1
+  read -rp "Path to local repo to evaluate: " REPO
+  if [[ -z "$REPO" ]]; then
+    echo "Error: repo path is required" >&2
+    exit 1
+  fi
+fi
+if [[ -z "$PROJECT" ]]; then
+  read -rp "Project name: " PROJECT
+fi
+if [[ -z "$PERSON" ]]; then
+  read -rp "Your name (tester): " PERSON
 fi
 
 REPO="$(cd "$REPO" && pwd)"  # resolve to absolute path
@@ -160,14 +171,24 @@ RUN_ID="qa-$(date +%Y%m%d-%H%M)-$(openssl rand -hex 2)"
 
 # --- Credential setup ---
 CRED_FILE=""
-if [[ -n "$AUTH" ]]; then
+if [[ -n "$CRED_PROFILE" ]]; then
+  # Direct profile loading from keychain — skip wizard
+  echo "Loading credentials from keychain profile: $CRED_PROFILE"
+elif [[ -n "$AUTH" ]]; then
   echo "Running credential setup wizard..."
-  CRED_FILE=$(npx tsx "$SPARFUCHS_ROOT/lib/credentials/setup-wizard.ts" --run-id="$RUN_ID")
-  if [[ -z "$CRED_FILE" || ! -f "$CRED_FILE" ]]; then
+  CRED_RESULT=$(npx tsx "$SPARFUCHS_ROOT/lib/credentials/setup-wizard.ts" --run-id="$RUN_ID")
+
+  if [[ "$CRED_RESULT" == keychain:* ]]; then
+    # Credentials loaded from OS keychain profile
+    CRED_PROFILE="${CRED_RESULT#keychain:}"
+    echo "Credentials loaded from keychain profile: $CRED_PROFILE"
+  elif [[ -n "$CRED_RESULT" && -f "$CRED_RESULT" ]]; then
+    CRED_FILE="$CRED_RESULT"
+    echo "Credentials written to: $CRED_FILE"
+  else
     echo "Error: credential setup failed" >&2
     exit 1
   fi
-  echo "Credentials written to: $CRED_FILE"
 fi
 
 # --- Backup and deploy ---
@@ -179,8 +200,8 @@ cleanup() {
   echo ""
   echo "Cleaning up..."
 
-  # Delete temporary credential file
-  if [[ -n "$CRED_FILE" && -f "$CRED_FILE" ]]; then
+  # Delete temporary credential file (skip if credentials came from keychain)
+  if [[ -n "$CRED_FILE" && -f "$CRED_FILE" && -z "$CRED_PROFILE" ]]; then
     npx tsx "$SPARFUCHS_ROOT/lib/credentials/teardown.ts" "$CRED_FILE" 2>/dev/null \
       || rm -f "$CRED_FILE"
   fi
@@ -359,12 +380,28 @@ case "$MODE" in
     ;;
 esac
 
+# --- Detect installed AI CLIs ---
+DETECTED_CLIS=""
+for cli_name in claude gemini codex openclaw aider; do
+  if command -v "$cli_name" >/dev/null 2>&1; then
+    cli_version=$("$cli_name" --version 2>/dev/null | head -1 || echo "installed")
+    DETECTED_CLIS="${DETECTED_CLIS:+$DETECTED_CLIS, }$cli_name ($cli_version)"
+  fi
+done
+
 echo ""
 echo "=== Sparfuchs QA Review ==="
 echo "Target repo:  $REPO"
 echo "Reports dir:  $REPORTS_DIR"
 echo "Mode:         $DISPLAY_MODE"
-echo "Auth:         ${CRED_FILE:-none}"
+echo "AI CLIs:      ${DETECTED_CLIS:-(none detected)}"
+AUTH_DISPLAY="none"
+if [[ -n "$CRED_PROFILE" ]]; then
+  AUTH_DISPLAY="keychain:$CRED_PROFILE"
+elif [[ -n "$CRED_FILE" ]]; then
+  AUTH_DISPLAY="file:$CRED_FILE"
+fi
+echo "Auth:         $AUTH_DISPLAY"
 echo "==========================="
 echo ""
 
@@ -372,8 +409,15 @@ echo ""
 cd "$REPO"
 
 if [[ "${ENGINE:-claude}" == "claude" ]]; then
-  # Existing Claude Code CLI path (unchanged)
+  # Claude Code CLI path
+  if ! command -v claude >/dev/null 2>&1; then
+    echo "Error: Claude CLI not found in PATH." >&2
+    echo "Install: https://docs.anthropic.com/en/docs/claude-code" >&2
+    echo "Or use: --engine orchestrated (requires API keys or another CLI)" >&2
+    exit 1
+  fi
   SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
+  SPARFUCHS_CRED_PROFILE="${CRED_PROFILE:-}" \
   claude \
     --append-system-prompt-file "$PROMPT_FILE" \
     --add-dir "$REPORTS_DIR" \
@@ -381,9 +425,10 @@ if [[ "${ENGINE:-claude}" == "claude" ]]; then
     --permission-mode default \
     "$USER_PROMPT"
 else
-  # Multi-LLM orchestrated engine (Phase 1: 7 heavy agents)
-  echo "Engine: orchestrated (Vercel AI SDK)"
+  # Multi-LLM orchestrated engine (supports API + CLI providers)
+  echo "Engine: orchestrated (multi-provider)"
   SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
+  SPARFUCHS_CRED_PROFILE="${CRED_PROFILE:-}" \
   npx tsx "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" \
     --repo "$REPO" \
     --sparfuchs-root "$SPARFUCHS_ROOT" \

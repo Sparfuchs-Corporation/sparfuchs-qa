@@ -27,7 +27,7 @@ make qa-setup    # runs npm install
 Verify:
 ```bash
 npx tsx --version    # should print a version number
-ls .claude/agents/   # should list 20 .md agent files
+ls .claude/agents/   # should list 37+ .md agent files
 ```
 
 ---
@@ -66,6 +66,41 @@ Runs the full audit and also sets up test credentials so agents can generate aut
 make qa-review REPO=/path/to/your/project FULL=1 AUTH=1
 ```
 
+### Option E: Training Mode
+
+Generates training materials for the target repo, including decision trees and module-specific guidance.
+
+```bash
+make qa-training REPO=/path/to/project
+make qa-training REPO=/path/to/project MODULE="auth"
+make qa-training REPO=/path/to/project JOURNEY="onboarding"
+```
+
+### Option F: Documentation Mode
+
+Generates architecture documentation from code analysis.
+
+```bash
+make qa-docs REPO=/path/to/project
+make qa-docs-all REPO=/path/to/project   # full doc generation
+```
+
+### Option G: Stub Detection
+
+Finds stubs, fake implementations, and dead integrations.
+
+```bash
+make qa-stubs REPO=/path/to/project
+```
+
+### Option H: Selective Agent Run
+
+Run only specific agents by name.
+
+```bash
+make qa-review REPO=/path/to/project --agents "security-reviewer,rbac-reviewer"
+```
+
 ### Optional Metadata
 
 Add context to your reports:
@@ -77,8 +112,14 @@ make qa-review \
   AUTH=1 \
   PROJECT="My App" \
   PERSON="Alice" \
-  URL="https://github.com/org/my-app"
+  URL="https://github.com/org/my-app" \
+  ENGINE=orchestrated \
+  PROVIDER=google
 ```
+
+**ENGINE and PROVIDER flags** (optional):
+- `ENGINE=orchestrated` — Uses multi-LLM Vercel AI SDK engine (defaults to `claude` for Claude Code CLI)
+- `PROVIDER` — Can be `xai`, `google`, or `anthropic` (only used with `ENGINE=orchestrated`)
 
 ---
 
@@ -110,7 +151,7 @@ Credentials written to: /tmp/sparfuchs-qa-creds-qa-20260403-1522-a3f1.json
 
 ```
 Note: overriding target repo's code-reviewer.md during review    # if target had its own
-Deployed 20 QA agents to /path/to/project/.claude/agents/
+Deployed 37 QA agents to /path/to/project/.claude/agents/
 
 === Sparfuchs QA Review ===
 Target repo:  /path/to/project
@@ -120,7 +161,7 @@ Auth:         /tmp/sparfuchs-qa-creds-qa-20260403-1522-a3f1.json
 ===========================
 ```
 
-The script copies 20 specialist agent `.md` files into your target repo's `.claude/agents/` directory. If the target repo already has agents with the same names, they are backed up and restored after the review.
+The script copies 37 standard QA agents (plus 2 optional documentation agents) as `.md` files into your target repo's `.claude/agents/` directory. If the target repo already has agents with the same names, they are backed up and restored after the review.
 
 ### Phase 3: Claude Session (interactive)
 
@@ -140,31 +181,71 @@ Claude then executes:
 2. **Discovery** — Reads package.json, scans directories, checks git state
 3. **Scope** — Full audit scans all source files; diff mode checks only changes
 4. **Risk triage** — Scores the risk level (skipped in full audit mode — all agents run)
-5. **Agent delegation** — Runs up to 20 specialist agents one by one:
+5. **Agent delegation** — Runs up to 37 specialist agents one by one:
 
+**Stage 0: Build & Semantic Safety**
 | Agent | What It Does |
 |---|---|
-| `build-verifier` | Format, lint, typecheck, build — all errors in one pass |
-| `code-reviewer` | Code quality, naming, complexity |
+| `build-verifier` | Runs format, lint, typecheck, compile — all errors grouped by root cause |
+| `semantic-diff-reviewer` | Detects automated transforms that change runtime behavior (codemods, unsafe fixes) |
+
+**Stage 1: Risk & Static Quality**
+| Agent | What It Does |
+|---|---|
+| `code-reviewer` | Code quality, correctness, and maintainability |
 | `security-reviewer` | Hardcoded secrets, injection risks, auth issues |
-| `performance-reviewer` | N+1 queries, memory leaks, bundle size |
-| `a11y-reviewer` | WCAG violations, missing alt text, focus management |
-| `dependency-auditor` | Outdated packages, deprecated deps |
-| `sca-reviewer` | Known CVEs in dependencies |
+| `performance-reviewer` | N+1 queries, memory leaks, bundle size, runtime bottlenecks |
+| `risk-analyzer` | Per-file risk scoring — blast radius, sensitivity, complexity |
+| `regression-risk-scorer` | Git history analysis — churn rates, revert frequency, co-change coupling |
+| `deploy-readiness-reviewer` | Missing env var fallbacks, CI secret gaps, config drift, stub implementations |
+| `contract-reviewer` | API contract drift between producers and consumers |
+| `rbac-reviewer` | Role/permission consistency across frontend, backend, and DB rules |
+| `access-query-validator` | Validates data queries include proper role-based access filtering |
+| `permission-chain-checker` | Validates access permission data is populated and synced throughout lifecycle |
+| `collection-reference-validator` | Cross-references Firestore/SQL/MongoDB collection strings across services |
+| `role-visibility-matrix` | Generates role × module visibility matrix; reports access filtering gaps |
+| `a11y-reviewer` | WCAG 2.1 AA analysis — alt text, labels, keyboard traps, contrast |
+| `compliance-reviewer` | GDPR, CCPA, PII handling, data retention, consent mechanisms |
+| `dead-code-reviewer` | Unused exports, orphaned files, empty stubs, committed node_modules |
+| `spec-verifier` | Verifies code against PRD/spec documents |
+| `ui-intent-verifier` | Verifies UI element labels match actual code behavior |
+
+**Stage 2: Integrity & Prep**
+| Agent | What It Does |
+|---|---|
+| `schema-migration-reviewer` | Compares DB schema definitions against migration files — catches drift |
+| `mock-integrity-checker` | Validates test mocks match real implementation signatures |
+| `environment-parity-checker` | Compares configs across local/staging/production/CI environments |
+| `iac-reviewer` | Terraform, Docker, CI/CD pipeline issues |
+| `dependency-auditor` | Outdated packages, deprecated deps, unmaintained packages |
+| `sca-reviewer` | Known CVEs, license risks, supply-chain concerns |
+| `api-spec-reviewer` | OpenAPI spec vs implementation drift |
+| `doc-reviewer` | Documentation accuracy and completeness |
 | `crud-tester` | Generates API CRUD test scripts |
 | `e2e-tester` | Generates Playwright E2E test specs |
-| `contract-reviewer` | API contract drift between frontend/backend |
-| `rbac-reviewer` | Role/permission consistency |
-| `compliance-reviewer` | PII handling, data retention |
-| `iac-reviewer` | Dockerfile, CI/CD, Terraform issues |
-| `doc-reviewer` | Documentation accuracy and completeness |
-| `dead-code-reviewer` | Unused exports, orphaned files |
-| `api-spec-reviewer` | OpenAPI spec vs implementation drift |
 | `fixture-generator` | Test factory functions from TypeScript types |
+| `boundary-fuzzer` | Generates edge-case inputs for exported functions |
+
+**Stage 3: Execution & Live Validation**
+| Agent | What It Does |
+|---|---|
+| `test-runner` | Executes the project's existing test suite, parses pass/fail/skip counts |
+| `smoke-test-runner` | Health checks against running environment — auth flow, core CRUD, page loads |
+| `api-contract-prober` | Makes real HTTP calls to validate API responses match specs |
 | `failure-analyzer` | Root-cause analysis of test failures |
-| `spec-verifier` | Verifies code against PRD/spec documents |
+| `stub-detector` | Finds stubs masquerading as real features, fake saves, hardcoded data |
+
+**Stage 4: Synthesis & Gate**
+| Agent | What It Does |
+|---|---|
 | `qa-gap-analyzer` | Identifies coverage gaps across the review |
-| `risk-analyzer` | Per-file risk scoring |
+| `release-gate-synthesizer` | Aggregates findings into Go/No-Go ship decision with risk score |
+
+**Optional Documentation Agents** (deployed only with `--training` or `--docs`)
+| Agent | What It Does |
+|---|---|
+| `training-system-builder` | Multi-phase training content generator with decision trees per module |
+| `architecture-doc-builder` | Generates architecture documentation from code analysis |
 
 6. **Report writing** — Compiles all findings into the final reports
 
@@ -178,7 +259,7 @@ Credential file deleted: /tmp/sparfuchs-qa-creds-qa-20260403-1522-a3f1.json
 Cleanup complete.
 ```
 
-- All 20 deployed agent files are removed from the target repo by name
+- All 37 deployed agent files are removed from the target repo by name
 - Any backed-up agents are restored
 - The temporary credential file is deleted
 - The `.claude/agents/` directory is removed if it didn't exist before
@@ -259,14 +340,129 @@ The credential file is written to `/tmp/sparfuchs-qa-creds-{runid}.json` with `0
 
 ## Review Mode Comparison
 
-| | Build Check | Diff Review | Full Audit | Full + Auth |
-|---|---|---|---|---|
-| **Command** | `make qa-build-check REPO=...` | `make qa-review REPO=...` | `+ FULL=1` | `+ FULL=1 AUTH=1` |
-| **Scope** | Build pipeline only | Changed files only | All source files | All source files |
-| **Agents** | `build-verifier` only | Risk-based subset | All 21 agents | All 21 + auth-aware generation |
-| **Duration** | 2-5 minutes | 5-15 minutes | 30-60+ minutes | 30-60+ minutes |
-| **Generated tests** | None | Only if relevant files changed | Full codebase scan | Full scan with login/auth setup |
-| **Best for** | Pre-push "will CI pass?" | Pre-commit, pre-PR | First-time onboarding, periodic audits | Projects with auth-gated features |
+| | Build Check | Diff Review | Full Audit | Full + Auth | Training | Docs | Selective | Stubs |
+|---|---|---|---|---|---|---|---|---|
+| **Command** | `make qa-build-check REPO=...` | `make qa-review REPO=...` | `+ FULL=1` | `+ FULL=1 AUTH=1` | `make qa-training REPO=...` | `make qa-docs REPO=...` | `+ --agents "..."` | `make qa-stubs REPO=...` |
+| **Scope** | Build pipeline only | Changed files only | All source files | All source files | All source files | All source files | Specified agents | All source files |
+| **Agents** | `build-verifier` only | Risk-based subset | All 37 agents | All 37 + auth-aware | 37 + documentation agents | 37 + documentation agents | Selected subset | All 37 agents |
+| **Duration** | 2-5 minutes | 5-15 minutes | 30-60+ minutes | 30-60+ minutes | 15-30 minutes | 15-30 minutes | 5-20 minutes | 10-25 minutes |
+| **Generated tests** | None | Only if relevant files changed | Full codebase scan | Full scan with login/auth setup | None | None | Varies | None |
+| **Output** | Build report | Targeted findings | Comprehensive QA report | QA + auth-aware tests | Training modules | Architecture docs | Custom findings | Stub analysis |
+| **Best for** | Pre-push "will CI pass?" | Pre-commit, pre-PR | First-time onboarding, periodic audits | Projects with auth-gated features | Onboarding new team members | Architecture documentation | Focused security/compliance | Finding unmaintained code |
+
+---
+
+## Additional Commands
+
+### Canary Commands
+
+Quick sanity checks for the QA infrastructure:
+
+```bash
+make qa-quick      # Run 15 canary checks (stdout)
+make qa-push       # Run canaries + push results to Firestore
+```
+
+### Supply Chain & Package Verification
+
+Check for security vulnerabilities and unmaintained dependencies:
+
+```bash
+make qa-sca             # Full SCA (supply chain attack) check + SBOM generation
+make qa-sca-push        # SCA + push results to Firestore
+make qa-verify          # SCA dry-run (no writes)
+```
+
+### Finding & Delta Analysis
+
+Compare findings across multiple runs and manage historical data:
+
+```bash
+make qa-delta PROJECT=my-app        # Compare findings across runs
+make qa-cleanup PROJECT=my-app      # Archive old runs (keeps 10 most recent)
+```
+
+### Flaky Test Tracking
+
+Identify and report tests that fail intermittently:
+
+```bash
+make qa-flaky      # Report flaky tests
+```
+
+### Evolution & Adaptation
+
+Analyze historical canary data and recommend threshold adjustments:
+
+```bash
+make qa-evolve           # Analyze canary history, suggest threshold changes
+make qa-evolve-dry       # Dry-run evolution analysis
+make qa-evolve-v2 PROJECT=my-app  # Local evolution (uses qa-data/ instead of Firestore)
+```
+
+### Data Sync
+
+Synchronize Firestore data with local analysis:
+
+```bash
+make qa-sync PROJECT=my-app    # Sync Firestore data to local qa-data/
+```
+
+### Schema & Build Checks
+
+Validate database schemas and verify build viability:
+
+```bash
+make qa-schema-check REPO=/path/to/project   # Schema validation
+make qa-build-check REPO=/path/to/project    # Build verification only
+```
+
+### Cache Management
+
+Manage the file audit cache for faster re-runs:
+
+```bash
+make qa-cache-status PROJECT=my-app      # Show file audit cache state
+make qa-cache-reset PROJECT=my-app       # Clear file audit cache
+```
+
+### API Key Management
+
+Securely manage API keys in your OS keychain:
+
+```bash
+make qa-keys-check     # List stored keys in OS keychain
+make qa-keys-setup     # Instructions for storing API keys
+```
+
+### Agent Integrity
+
+Verify that deployed agents haven't been modified:
+
+```bash
+make qa-hashes-update  # Regenerate agent-hashes.json
+```
+
+### NPM Script Equivalents
+
+All make commands have corresponding npm scripts:
+
+```bash
+npm run canaries               # Run canaries
+npm run qa:quick               # Run canaries (same as qa-quick)
+npm run qa:report-push         # Push QA report to Firestore
+npm run qa:nightly             # Trigger nightly regression
+npm run qa:seed-baselines      # Seed AI baselines
+npm run qa:sca                 # Full SCA check
+npm run qa:verify              # SCA dry-run
+npm run qa:flaky               # Flaky test report
+npm run qa:flaky-track         # Track flaky tests
+npm run qa:cred-setup          # Run credential setup wizard
+npm run qa:delta               # Delta report
+npm run qa:evolve-v2           # Evolution analysis v2
+npm run qa:cleanup             # Archive old runs
+npm run qa:sync                # Firestore sync
+```
 
 ---
 
