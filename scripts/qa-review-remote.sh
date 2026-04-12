@@ -15,6 +15,20 @@ AGENTS_SRC="$SPARFUCHS_ROOT/.claude/agents"
 SKILL_SRC="$SPARFUCHS_ROOT/.claude/skills/qa-review/SKILL.md"
 REPORTS_DIR=""  # set after mode detection
 
+# Map shell CLI binary names to orchestrator ProviderName values
+cli_to_provider() {
+  case "$1" in
+    claude)   echo "claude-cli" ;;
+    gemini)   echo "gemini-cli" ;;
+    codex)    echo "codex-cli" ;;
+    openclaw) echo "openclaw" ;;
+    *)        echo "$1" ;;
+  esac
+}
+
+# CLIs that have orchestrator adapters (used to filter selection menu)
+SUPPORTED_CLIS="claude gemini codex openclaw"
+
 # Agent filenames we deploy (and clean up by name — never wildcard)
 AGENT_FILES=(
   # Stage 0: Build & Semantic Safety
@@ -86,6 +100,7 @@ TRAINING=""
 DOCS=""
 REF_DOCS=""
 CRED_PROFILE=""
+NO_INTERACTIVE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -104,6 +119,7 @@ while [[ $# -gt 0 ]]; do
     --provider)  PROVIDER="$2"; shift 2 ;;
     --ref-docs)  REF_DOCS="$2"; shift 2 ;;
     --profile)   CRED_PROFILE="$2"; shift 2 ;;
+    --no-interactive) NO_INTERACTIVE="1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -144,6 +160,134 @@ REPO="$(cd "$REPO" && pwd)"  # resolve to absolute path
 if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
   echo "Error: $REPO is not a git repository" >&2
   exit 1
+fi
+
+# --- Detect installed AI CLIs ---
+DETECTED_CLIS=""
+DETECTED_CLI_NAMES=()
+DETECTED_CLI_LABELS=()
+
+for cli_name in claude gemini codex openclaw aider; do
+  if command -v "$cli_name" >/dev/null 2>&1; then
+    cli_version=$("$cli_name" --version 2>/dev/null | head -1 || echo "installed")
+    DETECTED_CLIS="${DETECTED_CLIS:+$DETECTED_CLIS, }$cli_name ($cli_version)"
+    DETECTED_CLI_NAMES+=("$cli_name")
+    DETECTED_CLI_LABELS+=("$cli_name ($cli_version)")
+  fi
+done
+
+# --- Interactive engine selection ---
+if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 0 ]]; then
+  echo ""
+  echo "Select engine:"
+
+  ENGINE_OPTIONS=()
+  ENGINE_OPTION_LABELS=()
+  DEFAULT_ENGINE_IDX=1
+
+  opt_idx=0
+  for i in "${!DETECTED_CLI_NAMES[@]}"; do
+    cli="${DETECTED_CLI_NAMES[$i]}"
+    label="${DETECTED_CLI_LABELS[$i]}"
+    # Only show CLIs that have orchestrator adapters
+    if [[ " $SUPPORTED_CLIS " != *" $cli "* ]]; then
+      continue
+    fi
+    ((opt_idx++))
+    if [[ "$cli" == "claude" ]]; then
+      ENGINE_OPTIONS+=("claude-direct")
+      ENGINE_OPTION_LABELS+=("Claude CLI — direct mode $label")
+      DEFAULT_ENGINE_IDX=$opt_idx
+    else
+      ENGINE_OPTIONS+=("$cli")
+      ENGINE_OPTION_LABELS+=("$label — orchestrated mode")
+    fi
+  done
+
+  # Always add orchestrated multi-provider as last option
+  ((opt_idx++))
+  ENGINE_OPTIONS+=("orchestrated")
+  ENGINE_OPTION_LABELS+=("Orchestrated — multi-provider engine")
+
+  for i in "${!ENGINE_OPTIONS[@]}"; do
+    idx=$((i + 1))
+    default_tag=""
+    if [[ $idx -eq $DEFAULT_ENGINE_IDX ]]; then
+      default_tag=" (default)"
+    fi
+    echo "  $idx. ${ENGINE_OPTION_LABELS[$i]}$default_tag"
+  done
+
+  read -rp "Choice [1-$opt_idx, default=$DEFAULT_ENGINE_IDX]: " engine_choice
+  engine_choice="${engine_choice:-$DEFAULT_ENGINE_IDX}"
+
+  selected_idx=$((engine_choice - 1))
+  if [[ $selected_idx -ge 0 && $selected_idx -lt ${#ENGINE_OPTIONS[@]} ]]; then
+    selected="${ENGINE_OPTIONS[$selected_idx]}"
+    if [[ "$selected" == "claude-direct" ]]; then
+      ENGINE="claude"
+    elif [[ "$selected" == "orchestrated" ]]; then
+      ENGINE="orchestrated"
+    else
+      ENGINE="orchestrated"
+      PROVIDER="$(cli_to_provider "$selected")"
+    fi
+  else
+    echo "Invalid selection, using default (claude)."
+    ENGINE="claude"
+  fi
+elif [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -eq 0 ]]; then
+  # No CLIs detected — default to orchestrated
+  echo ""
+  echo "No AI CLIs detected in PATH."
+  echo "Defaulting to orchestrated engine (requires API keys)."
+  ENGINE="orchestrated"
+fi
+ENGINE="${ENGINE:-claude}"
+
+# --- Interactive scan-type confirmation ---
+EXPLICIT_MODE_FLAG=""
+[[ -n "$FULL" ]] && EXPLICIT_MODE_FLAG="1"
+[[ -n "$TRAINING" ]] && EXPLICIT_MODE_FLAG="1"
+[[ -n "$DOCS" ]] && EXPLICIT_MODE_FLAG="1"
+[[ -n "$AGENTS" ]] && EXPLICIT_MODE_FLAG="1"
+
+if [[ -z "$EXPLICIT_MODE_FLAG" && -z "$NO_INTERACTIVE" ]]; then
+  echo ""
+  echo "Select scan type:"
+  echo "  1. Diff review — changes since last commit (default)"
+  echo "  2. Full audit — entire codebase"
+  echo "  3. Training — generate training documentation"
+  echo "  4. Architecture docs — generate architecture documentation"
+
+  read -rp "Choice [1-4, default=1]: " scan_choice
+  scan_choice="${scan_choice:-1}"
+
+  case "$scan_choice" in
+    1)
+      MODE="review"
+      FULL=""
+      ;;
+    2)
+      MODE="review"
+      FULL="--full"
+      ;;
+    3)
+      MODE="training"
+      TRAINING="1"
+      FULL=""
+      ;;
+    4)
+      MODE="docs"
+      DOCS="1"
+      FULL=""
+      ;;
+    *)
+      echo "Invalid selection, using default (diff review)."
+      MODE="review"
+      FULL=""
+      ;;
+  esac
 fi
 
 # --- Select skill and output dir based on mode ---
@@ -380,20 +524,12 @@ case "$MODE" in
     ;;
 esac
 
-# --- Detect installed AI CLIs ---
-DETECTED_CLIS=""
-for cli_name in claude gemini codex openclaw aider; do
-  if command -v "$cli_name" >/dev/null 2>&1; then
-    cli_version=$("$cli_name" --version 2>/dev/null | head -1 || echo "installed")
-    DETECTED_CLIS="${DETECTED_CLIS:+$DETECTED_CLIS, }$cli_name ($cli_version)"
-  fi
-done
-
 echo ""
 echo "=== Sparfuchs QA Review ==="
 echo "Target repo:  $REPO"
 echo "Reports dir:  $REPORTS_DIR"
 echo "Mode:         $DISPLAY_MODE"
+echo "Engine:       $ENGINE${PROVIDER:+ (provider: $PROVIDER)}"
 echo "AI CLIs:      ${DETECTED_CLIS:-(none detected)}"
 AUTH_DISPLAY="none"
 if [[ -n "$CRED_PROFILE" ]]; then
