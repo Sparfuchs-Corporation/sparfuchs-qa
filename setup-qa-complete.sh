@@ -23,6 +23,9 @@ What it does not do:
   - Pull, commit, or push git changes
   - Clone external repositories
   - Overwrite tracked source files
+
+To remove local install/runtime artifacts later, run:
+  ./uninstall-qa-complete.sh
 EOF
 }
 
