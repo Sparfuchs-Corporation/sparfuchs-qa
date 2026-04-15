@@ -104,7 +104,19 @@ export function parseAllAgents(
   const files = readdirSync(agentsDir)
     .filter(f => f.endsWith('.md'))
     .sort();
-  return files.map(f => parseAgentFile(join(agentsDir, f), overrides));
+
+  const agents: AgentDefinition[] = [];
+  for (const f of files) {
+    const filePath = join(agentsDir, f);
+    const raw = readFileSync(filePath, 'utf8');
+    // Skip files without YAML frontmatter (e.g. .agent.md, README)
+    if (!raw.startsWith('---\n')) {
+      process.stderr.write(`Skipping non-agent file: ${f}\n`);
+      continue;
+    }
+    agents.push(parseAgentFile(filePath, overrides));
+  }
+  return agents;
 }
 
 export function parseAgentsByNames(
