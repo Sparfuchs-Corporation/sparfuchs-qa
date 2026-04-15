@@ -78,15 +78,14 @@ export async function printBudgetPrompt(
   const liteCount = budgetConfig.presets.lite.length;
 
   process.stderr.write('Select budget mode:\n');
-  process.stderr.write(`  1. No limit — all ${estimate.agentCount} agents, no token cap (default)\n`);
-  process.stderr.write(`  2. Full audit — all ${estimate.agentCount} agents, capped at ${formatTokens(budgetConfig.defaultCap)}\n`);
-  process.stderr.write(`  3. Standard — ${standardCount} core agents\n`);
-  process.stderr.write(`  4. Lite — ${liteCount} critical agents only\n`);
-  process.stderr.write(`  5. Custom token cap\n`);
+  process.stderr.write(`  1. No limit — all ${estimate.agentCount} agents, no skipping, no cap (default)\n`);
+  process.stderr.write(`  2. Standard — ${standardCount} core agents\n`);
+  process.stderr.write(`  3. Lite — ${liteCount} critical agents only\n`);
+  process.stderr.write(`  4. Custom token cap\n`);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise<string>(resolve => {
-    rl.question('\nChoice [1-5, default=1]: ', resolve);
+    rl.question('\nChoice [1-4, default=1]: ', resolve);
   });
 
   const choice = parseInt(answer, 10) || 1;
@@ -100,19 +99,11 @@ export async function printBudgetPrompt(
         used: 0,
         preset: 'full',
         agentSet: agents.map(a => a.name),
+        forceAll: true,
       };
       break;
 
     case 2:
-      budget = {
-        cap: budgetConfig.defaultCap,
-        used: 0,
-        preset: 'full',
-        agentSet: agents.map(a => a.name),
-      };
-      break;
-
-    case 3:
       budget = {
         cap: 0,
         used: 0,
@@ -121,7 +112,7 @@ export async function printBudgetPrompt(
       };
       break;
 
-    case 4:
+    case 3:
       budget = {
         cap: 0,
         used: 0,
@@ -130,7 +121,7 @@ export async function printBudgetPrompt(
       };
       break;
 
-    case 5: {
+    case 4: {
       const capAnswer = await new Promise<string>(resolve => {
         rl.question('Token cap (e.g., 500000): ', resolve);
       });

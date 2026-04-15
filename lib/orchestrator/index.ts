@@ -4,7 +4,7 @@ import * as readline from 'node:readline';
 import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
 import { isApiProvider } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
-import { parseAgentsByNames, parsePhase1Agents, validateAgentIntegrity } from './agent-parser.js';
+import { parseAgentsByNames, parsePhase1Agents, parseAllAgents, validateAgentIntegrity } from './agent-parser.js';
 import { runAgent } from './agent-runner.js';
 import { ObservabilityTracker } from './observability.js';
 import { QualityAuditor } from './quality-auditor.js';
@@ -79,7 +79,9 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const agentsDir = join(config.repoPath, '.claude', 'agents');
   const agents = config.selectedAgents?.length
     ? parseAgentsByNames(agentsDir, config.selectedAgents, modelsConfig.agentOverrides)
-    : parsePhase1Agents(agentsDir, modelsConfig.agentOverrides);
+    : config.mode === 'full'
+      ? parseAllAgents(agentsDir, modelsConfig.agentOverrides)
+      : parsePhase1Agents(agentsDir, modelsConfig.agentOverrides);
   const hashesPath = join(config.sparfuchsRoot, 'config', 'agent-hashes.json');
   const integrity = validateAgentIntegrity(agents, hashesPath);
   if (!integrity.valid) {
@@ -188,11 +190,17 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const estimate = estimateTokenCost(agents, modelsConfig, primaryProvider);
   const budget = await printBudgetPrompt(estimate, agents, modelsConfig);
 
-  // Filter agents by budget preset
-  const budgetAgentSet = new Set(budget.agentSet);
-  for (const agent of agents) {
-    if (!isAgentInBudget(agent.name, budget)) {
-      agentsToSkip.add(agent.name);
+  // forceAll: clear all skip reasons — run every agent regardless
+  if (budget.forceAll) {
+    agentsToSkip.clear();
+  }
+
+  // Filter agents by budget preset (only when not forcing all)
+  if (!budget.forceAll) {
+    for (const agent of agents) {
+      if (!isAgentInBudget(agent.name, budget)) {
+        agentsToSkip.add(agent.name);
+      }
     }
   }
 

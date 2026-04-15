@@ -89,6 +89,7 @@ export interface TokenBudget {
   used: number;
   preset: 'full' | 'standard' | 'lite' | 'custom';
   agentSet: string[];
+  forceAll?: boolean;
 }
 
 export interface TokenEstimate {
@@ -203,7 +204,7 @@ export interface OrchestrationConfig {
   sessionLogDir: string;
   runId: string;
   projectSlug: string;
-  mode: 'full' | 'tier1' | 'tier2' | 'diff';
+  mode: 'full' | 'review' | 'tier1' | 'tier2' | 'diff' | 'selective' | 'training' | 'docs';
   providerOverride?: ProviderName;
   modelsConfig: ModelsYaml;
   userPrompt: string;

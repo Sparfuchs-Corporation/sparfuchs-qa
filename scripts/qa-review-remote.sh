@@ -143,9 +143,11 @@ elif [[ -n "$TRAINING" && -z "$FULL" ]]; then
   MODE="training"
 elif [[ -n "$DOCS" && -z "$FULL" && -z "$TRAINING" ]]; then
   MODE="docs"
+elif [[ -n "$FULL" ]]; then
+  MODE="full"
+  # TRAINING and DOCS become additive flags passed in the prompt
 else
   MODE="review"
-  # TRAINING and DOCS become additive flags passed in the prompt
 fi
 
 # --- Interactive prompts for missing values ---
@@ -277,7 +279,7 @@ if [[ -z "$EXPLICIT_MODE_FLAG" && -z "$NO_INTERACTIVE" ]]; then
       FULL=""
       ;;
     2)
-      MODE="review"
+      MODE="full"
       FULL="--full"
       ;;
     3)
