@@ -105,7 +105,7 @@ export async function runAgent(
 
 // --- Helpers ---
 
-const API_PROVIDER_NAMES = new Set(['xai', 'google', 'anthropic']);
+const API_PROVIDER_NAMES = new Set(['xai', 'google', 'anthropic', 'openai']);
 
 function buildFallbackChain(
   preferredProvider: ProviderName,

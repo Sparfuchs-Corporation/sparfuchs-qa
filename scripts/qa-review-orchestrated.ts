@@ -33,6 +33,9 @@ async function main(): Promise<void> {
   const mode = (args['mode'] ?? 'full') as OrchestrationConfig['mode'];
   const provider = args['provider'] as ProviderName | undefined;
   const userPrompt = args['user-prompt'] ?? `Run a QA review for this repository.`;
+  const composeRules = args['compose-rules'] === 'true' || process.env.COMPOSE_RULES === 'true';
+  const autoComplete = args['auto-complete'] === 'true' || process.env.QA_AUTO_COMPLETE === 'true';
+  const baseline = args['baseline'] === 'true' || process.env.QA_BASELINE === 'true';
 
   // Derive project slug from repo directory name
   const projectSlug = repoPath.split('/').pop()!.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -51,6 +54,9 @@ async function main(): Promise<void> {
     providerOverride: provider,
     modelsConfig: undefined as never, // loaded by runOrchestration
     userPrompt,
+    composeRules,
+    autoComplete,
+    baseline,
   };
 
   try {

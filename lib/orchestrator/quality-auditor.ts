@@ -8,7 +8,7 @@ import { isApiProvider } from './types.js';
 import type { QaFinding } from '../types.js';
 import { toModelId } from './adapters/api-adapter.js';
 
-const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic']);
+const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic', 'openai']);
 
 // --- Deterministic Checks ---
 

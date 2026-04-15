@@ -3,7 +3,7 @@ import type { QaFinding } from '../types.js';
 // --- Provider & Model ---
 
 export type ModelTier = 'heavy' | 'mid' | 'light';
-export type ApiProviderName = 'xai' | 'google' | 'anthropic';
+export type ApiProviderName = 'xai' | 'google' | 'anthropic' | 'openai';
 export type CliProviderName = 'claude-cli' | 'gemini-cli' | 'codex-cli' | 'openclaw';
 export type ProviderName = ApiProviderName | CliProviderName;
 export type ProviderType = 'api' | 'cli';
@@ -37,6 +37,7 @@ export interface TierModels {
   xai: string;
   google: string;
   anthropic: string;
+  openai: string;
 }
 
 // --- Adapter Capabilities ---
@@ -74,6 +75,7 @@ export interface TokenPricing {
   xai: number;
   google: number;
   anthropic: number;
+  openai: number;
 }
 
 export interface TokenBudgetConfig {
@@ -203,6 +205,10 @@ export interface OrchestrationConfig {
   moduleScope?: string;
   referenceDocPaths?: string[];
   claimsManifestPath?: string;
+  composeRules: boolean;
+  autoComplete: boolean;
+  baseline: boolean;
+  previousFindingsPath?: string;
 }
 
 // --- Credential Store ---

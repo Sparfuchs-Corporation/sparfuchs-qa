@@ -10,7 +10,7 @@ const DEFAULT_CONFIG_PATH = join(import.meta.dirname, '../../config/models.yaml'
 
 // --- Zod schema ---
 
-const ProviderNameEnum = z.enum(['xai', 'google', 'anthropic', 'claude-cli', 'gemini-cli', 'codex-cli', 'openclaw']);
+const ProviderNameEnum = z.enum(['xai', 'google', 'anthropic', 'openai', 'claude-cli', 'gemini-cli', 'codex-cli', 'openclaw']);
 const TierEnum = z.enum(['heavy', 'mid', 'light']);
 
 const ApiProviderSchema = z.object({
@@ -37,6 +37,7 @@ const TokenBudgetSchema = z.object({
     xai: z.number(),
     google: z.number(),
     anthropic: z.number(),
+    openai: z.number(),
   }),
   defaultCap: z.number().default(0),
 }).optional();
@@ -52,6 +53,7 @@ const ModelsYamlSchema = z.object({
     xai: z.string(),
     google: z.string(),
     anthropic: z.string(),
+    openai: z.string(),
   })),
   agentOverrides: z.record(z.string(), z.object({
     provider: ProviderNameEnum.optional(),
@@ -176,7 +178,7 @@ export function mapLegacyTier(frontmatterModel: string): ModelTier {
   return tier;
 }
 
-const API_PROVIDER_NAMES = new Set(['xai', 'google', 'anthropic']);
+const API_PROVIDER_NAMES = new Set(['xai', 'google', 'anthropic', 'openai']);
 
 export function resolveModelForAgent(
   agentName: string,
