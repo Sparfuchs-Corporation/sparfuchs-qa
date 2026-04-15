@@ -32,6 +32,8 @@ make qa-quick
 make qa-review REPO=/path/to/target/repo
 ```
 
+For direct CLI use, `qa-review` supports Claude in direct mode and supports Codex through the orchestrated engine path with `ENGINE=orchestrated PROVIDER=codex-cli`.
+
 ## Key Paths
 
 - `canaries/` — QA canary checks
