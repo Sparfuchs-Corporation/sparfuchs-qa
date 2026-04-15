@@ -10,7 +10,8 @@ Run a multi-agent QA review against any git repository. This guide covers instal
 |---|---|---|
 | **Node.js 20+** | `node --version` | [nodejs.org](https://nodejs.org/) |
 | **Claude Code CLI** | `claude --version` | `npm install -g @anthropic-ai/claude-code` |
-| **Authenticated Claude** | `claude` (opens session) | Follow the auth prompts on first launch |
+| **Codex CLI** | `codex --version` | `brew install --cask codex` or see the OpenAI Codex install docs |
+| **Authenticated AI CLI** | `claude` or `codex` | Follow the auth prompts on first launch |
 | **Git** | `git --version` | Pre-installed on macOS; `brew install git` otherwise |
 | **Target repo** | Must be a git repository | `cd /path/to/project && git status` |
 
@@ -118,8 +119,8 @@ make qa-review \
 ```
 
 **ENGINE and PROVIDER flags** (optional):
-- `ENGINE=orchestrated` — Uses multi-LLM Vercel AI SDK engine (defaults to `claude` for Claude Code CLI)
-- `PROVIDER` — Can be `xai`, `google`, or `anthropic` (only used with `ENGINE=orchestrated`)
+- `ENGINE=orchestrated` — Uses the multi-provider orchestration engine instead of direct Claude CLI mode
+- `PROVIDER` — Can be `xai`, `google`, `anthropic`, `claude-cli`, `gemini-cli`, `codex-cli`, or `openclaw` (only used with `ENGINE=orchestrated`)
 
 ---
 

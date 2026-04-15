@@ -61,7 +61,7 @@ providers:
 
 # Fallback chain — can mix API and CLI providers
 # API providers tried first (full tool control), then CLI fallbacks
-fallbackChain: [xai, google, anthropic, openai, claude-cli, gemini-cli]
+fallbackChain: [xai, google, anthropic, claude-cli, gemini-cli, codex-cli]
 
 tiers:
   heavy:
