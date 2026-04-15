@@ -121,6 +121,7 @@ make qa-review \
 **ENGINE and PROVIDER flags** (optional):
 - `ENGINE=orchestrated` — Uses the multi-provider orchestration engine instead of direct Claude CLI mode
 - `PROVIDER` — Can be `xai`, `google`, `anthropic`, `claude-cli`, `gemini-cli`, `codex-cli`, or `openclaw` (only used with `ENGINE=orchestrated`)
+- In orchestrated mode, the live status table reports the resolved provider for every agent row, including agents skipped by testability or compatibility checks.
 
 ---
 

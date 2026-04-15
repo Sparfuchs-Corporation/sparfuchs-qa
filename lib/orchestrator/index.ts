@@ -215,6 +215,11 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     if (agentsToSkip.has(agent.name)) {
       const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
       const status = observer.registerAgent(agent.name);
+      const resolved = resolveModelForAgent(
+        agent.name, agent.tier, modelsConfig, config.providerOverride,
+      );
+      status.provider = resolved.provider;
+      status.model = resolved.model;
       status.status = 'complete';
       status.error = `Skipped: ${prediction?.reason ?? 'predicted ineffective or CLI-incompatible'}`;
       status.completedAt = new Date().toISOString();
