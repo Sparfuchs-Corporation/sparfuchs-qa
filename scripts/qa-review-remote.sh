@@ -587,7 +587,7 @@ else
   [[ -n "$BASELINE" ]] && ORCH_ARGS+=(--baseline true)
   [[ -n "$COVERAGE" ]] && ORCH_ARGS+=(--coverage "$COVERAGE")
   [[ -n "$PROVIDER" ]] && ORCH_ARGS+=(--provider "$PROVIDER")
-  [[ -n "$CONCURRENCY" ]] && ORCH_ARGS+=(--concurrency "$CONCURRENCY")
+  [[ -n "${CONCURRENCY:-}" ]] && ORCH_ARGS+=(--concurrency "$CONCURRENCY")
   SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
   SPARFUCHS_CRED_PROFILE="${CRED_PROFILE:-}" \
   npx tsx "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" "${ORCH_ARGS[@]}"
