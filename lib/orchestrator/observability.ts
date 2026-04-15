@@ -122,6 +122,7 @@ export class ObservabilityTracker {
       outputFileExists: false,
       outputSizeBytes: 0,
       coveragePercent: null,
+      filesAssigned: null,
       error: null,
     };
     this.agents.set(name, status);

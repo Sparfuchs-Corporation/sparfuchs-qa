@@ -131,6 +131,8 @@ export function resolveProviderKeys(
       const key = resolveApiKey(provider.apiKeyEnvVar, provider.apiKeyEnvVar);
       if (key) {
         available.push(name as ProviderName);
+        const sourceLabel = key.source === 'keychain' ? 'OS keychain' : 'env var';
+        process.stderr.write(`  ${name}: API key valid (${sourceLabel})\n`);
       } else {
         provider.enabled = false;
         disabled.push(`${name}: no key (checked OS keychain + ${provider.apiKeyEnvVar} env var)`);
@@ -182,6 +184,32 @@ export function mapLegacyTier(frontmatterModel: string): ModelTier {
 
 const API_PROVIDER_NAMES = new Set(['xai', 'google', 'anthropic', 'openai']);
 
+/**
+ * Resolve "API" / "CLI" meta-values to the first matching enabled provider.
+ * Passes through valid ProviderName values unchanged.
+ */
+function resolveProviderMeta(
+  raw: string | undefined,
+  config: ModelsYaml,
+): ProviderName | undefined {
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+
+  if (lower === 'api') {
+    for (const [name, cfg] of Object.entries(config.providers)) {
+      if (cfg.enabled && isApiProvider(cfg)) return name as ProviderName;
+    }
+    return undefined;
+  }
+  if (lower === 'cli') {
+    for (const [name, cfg] of Object.entries(config.providers)) {
+      if (cfg.enabled && isCliProvider(cfg)) return name as ProviderName;
+    }
+    return undefined;
+  }
+  return raw as ProviderName;
+}
+
 export function resolveModelForAgent(
   agentName: string,
   tier: ModelTier,
@@ -189,12 +217,12 @@ export function resolveModelForAgent(
   providerOverride?: ProviderName,
 ): { provider: ProviderName; model: string } {
   const override = config.agentOverrides[agentName];
-  const preferred = providerOverride ?? override?.provider ?? config.defaultProvider;
+  const resolved = resolveProviderMeta(providerOverride as string | undefined, config);
+  const preferred = resolved ?? override?.provider ?? config.defaultProvider;
 
   const preferredConfig = config.providers[preferred];
   if (preferredConfig?.enabled) {
     if (isCliProvider(preferredConfig)) {
-      // CLI providers use their binary name as "model"
       return { provider: preferred, model: preferredConfig.binary };
     }
     if (API_PROVIDER_NAMES.has(preferred)) {

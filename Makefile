@@ -34,7 +34,8 @@ qa-review:
 		$(if $(REF_DOCS),--ref-docs "$(REF_DOCS)") \
 		$(if $(COMPOSE_RULES),--compose-rules) \
 		$(if $(AUTO_COMPLETE),--auto-complete) \
-		$(if $(BASELINE),--baseline)
+		$(if $(BASELINE),--baseline) \
+		$(if $(CONCURRENCY),--concurrency "$(CONCURRENCY)")
 qa-ref-verify:
 	@bash scripts/qa-review-remote.sh \
 		--repo "$(REPO)" --full \

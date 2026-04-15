@@ -93,6 +93,7 @@ export class RunState {
   private babysitter: CoverageBabysitter | null = null;
   private completedDurations: number[] = [];
   private pricingPerMillion = 5.0; // default $/1M tokens for savings calc
+  private totalFiles = 0;
 
   setRunId(runId: string): void {
     this.runId = runId;
@@ -108,6 +109,10 @@ export class RunState {
 
   setPricing(pricePerMillion: number): void {
     this.pricingPerMillion = pricePerMillion;
+  }
+
+  setTotalFiles(count: number): void {
+    this.totalFiles = count;
   }
 
   registerAgent(name: string): AgentRunStatus {
@@ -129,6 +134,7 @@ export class RunState {
       outputFileExists: false,
       outputSizeBytes: 0,
       coveragePercent: null,
+      filesAssigned: null,
       error: null,
     };
     this.agents.set(name, status);
@@ -235,9 +241,9 @@ export class RunState {
       model: s.model,
       tokens: s.tokenUsage.input + s.tokenUsage.output,
       findings: s.findingCount,
-      files: s.coveragePercent !== null ? {
-        examined: Math.round((s.coveragePercent / 100) * 25), // approximate from percent
-        assigned: 25,
+      files: s.coveragePercent !== null && s.filesAssigned !== null ? {
+        examined: Math.round((s.coveragePercent / 100) * s.filesAssigned),
+        assigned: s.filesAssigned,
         percent: s.coveragePercent,
       } : null,
       durationMs: s.durationMs > 0 ? s.durationMs
@@ -291,7 +297,7 @@ export class RunState {
         targetPercent: this.babysitter.getTargetPercent(),
         actualPercent: this.babysitter.getCoveragePercent(),
         filesExamined: this.babysitter.getFilesExamined().size,
-        filesTotal: 0, // set by caller
+        filesTotal: this.totalFiles,
       } : null,
       providers: [...providerCounts.entries()].map(([name, agentCount]) => ({ name, agentCount })),
       fallbacks: this.fallbackEvents.length,

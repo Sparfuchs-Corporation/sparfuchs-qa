@@ -15,15 +15,23 @@ function isRateLimitError(err: unknown): boolean {
 }
 
 function isAuthError(err: unknown): boolean {
+  // Only treat 401 (invalid credentials) as auth errors.
+  // 403 can be rate-limit or permission — don't disable the provider for those.
   return err instanceof Error && (
-    err.message.includes('401') || err.message.includes('403') ||
-    err.message.toLowerCase().includes('unauthorized') || err.message.toLowerCase().includes('forbidden')
+    err.message.includes('401') ||
+    err.message.toLowerCase().includes('unauthorized')
   );
 }
 
 function isServerError(err: unknown): boolean {
   return err instanceof Error && /5\d{2}/.test(err.message);
 }
+
+// --- Provider failure tracking ---
+// Only disable a provider after multiple consecutive auth failures to avoid
+// killing a provider for an entire run due to one transient error.
+const AUTH_FAIL_THRESHOLD = 3;
+const authFailCounts = new Map<ProviderName, number>();
 
 // --- Runner ---
 
@@ -77,8 +85,12 @@ export async function runAgent(
         : 'unknown';
 
       if (isAuthError(err)) {
-        const providerConfig = config.modelsConfig.providers[provider];
-        if (providerConfig) providerConfig.enabled = false;
+        const count = (authFailCounts.get(provider) ?? 0) + 1;
+        authFailCounts.set(provider, count);
+        if (count >= AUTH_FAIL_THRESHOLD) {
+          const providerConfig = config.modelsConfig.providers[provider];
+          if (providerConfig) providerConfig.enabled = false;
+        }
       }
 
       const nextIdx = fallbackChain.findIndex(f => f.provider === provider) + 1;

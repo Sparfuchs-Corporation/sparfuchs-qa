@@ -154,6 +154,7 @@ export interface AgentRunStatus {
   outputFileExists: boolean;
   outputSizeBytes: number;
   coveragePercent: number | null;
+  filesAssigned: number | null;
   error: string | null;
 }
 
@@ -217,6 +218,7 @@ export interface OrchestrationConfig {
   baseline: boolean;
   previousFindingsPath?: string;
   coverageStrategy?: CoverageStrategy;
+  concurrency?: number;
 }
 
 // --- Credential Store ---

@@ -6,7 +6,9 @@ import { isApiProvider } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
 import { parseAgentsByNames, parsePhase1Agents, parseAllAgents, validateAgentIntegrity } from './agent-parser.js';
 import { runAgent } from './agent-runner.js';
-import { ObservabilityTracker } from './observability.js';
+import { RunState } from './run-state.js';
+import { TtyRenderer } from './renderers/tty-renderer.js';
+import { DashboardController } from './dashboard-controller.js';
 import { QualityAuditor } from './quality-auditor.js';
 import { parseFindingTags, parseAgentDataTags, appendFinding, writeAgentOutputEnvelope } from '../../scripts/qa-findings-manager.js';
 import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
@@ -250,166 +252,213 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     process.stderr.write(`Skipping agents: ${[...agentsToSkip].join(', ')}\n`);
   }
 
-  // 8. Run agents (with chunking support)
-  const observer = new ObservabilityTracker();
-  observer.setBudget(budget);
-  observer.setupKeyboardInput();
-  const auditor = new QualityAuditor(config, modelsConfig);
-  let budgetExceeded = false;
+  // 8. Build job list and pre-register all agents
+  type AgentJob = { agent: AgentDefinition; chunk: FileChunk | null; label: string };
+  const jobs: AgentJob[] = [];
 
   for (const agent of agents) {
-    if (budgetExceeded) break;
-
-    // Graceful quit — finish loop, write partial results
-    if (observer.isQuitRequested()) {
-      process.stderr.write('\nGraceful shutdown requested — skipping remaining agents.\n');
-      break;
-    }
-
-    // Pause — wait until resumed
-    while (observer.isPaused() && !observer.isQuitRequested()) {
-      await new Promise(resolve => setTimeout(resolve, 200));
-    }
-    if (observer.isQuitRequested()) {
-      process.stderr.write('\nGraceful shutdown requested — skipping remaining agents.\n');
-      break;
-    }
-    if (agentsToSkip.has(agent.name)) {
-      const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
-      const status = observer.registerAgent(agent.name);
-      const resolved = resolveModelForAgent(
-        agent.name, agent.tier, modelsConfig, config.providerOverride,
-      );
-      status.provider = resolved.provider;
-      status.model = resolved.model;
-      status.status = 'complete';
-      status.error = `Skipped: ${prediction?.reason ?? 'predicted ineffective or CLI-incompatible'}`;
-      status.completedAt = new Date().toISOString();
-      process.stderr.write(`\n--- Skipping ${agent.name}: ${status.error} ---\n`);
-      continue;
-    }
+    if (agentsToSkip.has(agent.name)) continue; // handled separately below
 
     const shouldChunk = chunkPlan && isChunkedAgent(agent.name);
     let chunks: Array<FileChunk | null> = shouldChunk ? [...chunkPlan.chunks] : [null];
 
-    // Apply maxChunksPerAgent for sweep mode
     if (shouldChunk && strategyConfig.maxChunksPerAgent !== null) {
       chunks = chunks.slice(0, strategyConfig.maxChunksPerAgent);
     }
 
-    // Unchunked scope hints — inject priority files from babysitter gap data
+    for (const chunk of chunks) {
+      const label = chunk ? `${agent.name}-chunk-${chunk.id}` : agent.name;
+      jobs.push({ agent, chunk, label });
+    }
+  }
+
+  // Smart scheduling: light unchunked first, then mid, then heavy/chunked
+  const TIER_PRIORITY: Record<string, number> = { light: 0, mid: 1, heavy: 2 };
+  jobs.sort((a, b) => {
+    const chunkA = a.chunk ? 1 : 0;
+    const chunkB = b.chunk ? 1 : 0;
+    if (chunkA !== chunkB) return chunkA - chunkB;
+    return (TIER_PRIORITY[a.agent.tier] ?? 1) - (TIER_PRIORITY[b.agent.tier] ?? 1);
+  });
+
+  // Initialize dashboard (RunState + TtyRenderer + Controller)
+  const runState = new RunState();
+  const ttyRenderer = new TtyRenderer();
+  const dashboard = new DashboardController(runState, ttyRenderer);
+  runState.setRunId(config.runId);
+  runState.setBudget(budget);
+  runState.setBabysitter(babysitter);
+  runState.setTotalFiles(allSourceFiles.length);
+
+  // Pre-register skipped agents
+  for (const agent of agents) {
+    if (!agentsToSkip.has(agent.name)) continue;
+    const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
+    const status = runState.registerAgent(agent.name);
+    const resolved = resolveModelForAgent(agent.name, agent.tier, modelsConfig, config.providerOverride);
+    status.provider = resolved.provider;
+    status.model = resolved.model;
+    status.status = 'complete';
+    status.error = `Skipped: ${prediction?.reason ?? 'predicted ineffective or CLI-incompatible'}`;
+    status.completedAt = new Date().toISOString();
+  }
+
+  // Pre-register all jobs so dashboard shows total from the start
+  for (const job of jobs) {
+    const status = runState.registerAgent(job.label);
+    const resolved = resolveModelForAgent(job.agent.name, job.agent.tier, modelsConfig, config.providerOverride);
+    status.provider = resolved.provider;
+    status.model = resolved.model;
+    if (job.chunk) {
+      status.filesAssigned = job.chunk.files.length;
+    }
+  }
+
+  dashboard.start();
+
+  const auditor = new QualityAuditor(config, modelsConfig);
+  let budgetExceeded = false;
+
+  // Concurrency limiter
+  const concurrency = config.concurrency ?? 8;
+  function createLimiter(max: number) {
+    let active = 0;
+    const queue: Array<() => void> = [];
+    return <T>(fn: () => Promise<T>): Promise<T> =>
+      new Promise((resolve, reject) => {
+        const run = () => {
+          active++;
+          fn().then(resolve, reject).finally(() => {
+            active--;
+            if (queue.length) queue.shift()!();
+          });
+        };
+        active < max ? run() : queue.push(run);
+      });
+  }
+  const limit = createLimiter(concurrency);
+
+  // Execute jobs with concurrency
+  const tasks = jobs.map(({ agent, chunk, label: agentLabel }) => limit(async () => {
+    // Check stop conditions before starting
+    if (budgetExceeded || dashboard.isQuitRequested()) return;
+
+    // Pause — wait until resumed
+    while (dashboard.isPaused() && !dashboard.isQuitRequested()) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    if (dashboard.isQuitRequested()) return;
+
+    const status = runState.getAgent(agentLabel)!;
+    status.status = 'running';
+    status.startedAt = new Date().toISOString();
+
+    const shouldChunk = chunk !== null;
     const injectScopeHint = babysittingEnabled
       && !shouldChunk
       && strategyConfig.unchunkedScopeHint
       && allSourceFiles.length > 50;
 
-    for (const chunk of chunks) {
-      const agentLabel = chunk
-        ? `${agent.name}-chunk-${chunk.id}`
-        : agent.name;
+    try {
+      const resolved = resolveModelForAgent(agent.name, agent.tier, modelsConfig, config.providerOverride);
 
-      const status = observer.registerAgent(agentLabel);
+      // Compose agent prompt when COMPOSE_RULES is enabled
+      const agentToRun = config.composeRules && rulesCache.size > 0
+        ? { ...agent, systemPrompt: composeAgentPrompt(agent.systemPrompt, rulesCache, resolved.model) }
+        : agent;
 
-      const resolved = resolveModelForAgent(
-        agent.name, agent.tier, modelsConfig, config.providerOverride,
+      let delegationPrompt = buildDelegationPrompt(agentToRun, config);
+
+      if (chunk && chunkPlan) {
+        delegationPrompt += buildChunkPromptSuffix(chunk, chunkPlan.chunks.length, config.repoPath);
+      }
+      if (config.moduleScope) {
+        delegationPrompt += `\nTarget module: ${config.moduleScope}. Only analyze files under this directory.\n`;
+      }
+      if (config.claimsManifestPath && REFDOC_AWARE_AGENTS.has(agent.name)) {
+        delegationPrompt += buildRefDocPromptSuffix(config.claimsManifestPath);
+      }
+
+      // Inject uncovered files as priority targets for unchunked agents
+      if (injectScopeHint) {
+        const priorityFiles = babysitter.getUncoveredFilesForHint(50);
+        if (priorityFiles.length > 0) {
+          const relative = priorityFiles.map(f => f.replace(config.repoPath + '/', ''));
+          delegationPrompt +=
+            `\n\nPRIORITY FILES — The following files have not been examined by other agents yet. ` +
+            `Include them in your analysis where relevant to your domain:\n` +
+            relative.map(f => `  ${f}`).join('\n') + '\n';
+        }
+      }
+
+      const result = await runAgent(
+        agentToRun, delegationPrompt, config, status,
+        () => { /* status updates happen via RunState refresh */ },
+        (e) => runState.recordFallback(e),
       );
-      status.provider = resolved.provider;
-      status.model = resolved.model;
 
-      observer.startAgent(agentLabel);
+      const outputPath = join(config.sessionLogDir, `${formatTime()}_${agentLabel}.md`);
+      writeFileSync(outputPath, result.text);
+      status.outputFilePath = outputPath;
+      status.outputFileExists = true;
+      status.outputSizeBytes = Buffer.byteLength(result.text);
 
-      try {
-        // Compose agent prompt when COMPOSE_RULES is enabled
-        const agentToRun = config.composeRules && rulesCache.size > 0
-          ? { ...agent, systemPrompt: composeAgentPrompt(agent.systemPrompt, rulesCache, resolved.model) }
-          : agent;
+      // Record coverage via babysitter (single source of truth)
+      const { capped: cappedLog, droppedCount } = capToolCallLog(result.toolCallLog);
+      if (droppedCount > 0) {
+        process.stderr.write(`  toolCallLog capped: ${droppedCount} entries had args dropped\n`);
+      }
+      if (babysittingEnabled) {
+        babysitter.recordAgentRun(agentLabel, cappedLog);
+      }
 
-        let delegationPrompt = buildDelegationPrompt(agentToRun, config);
+      if (chunk) {
+        const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
+        status.coveragePercent = chunkEval.coveragePercent;
+      }
 
-        if (chunk && chunkPlan) {
-          delegationPrompt += buildChunkPromptSuffix(chunk, chunkPlan.chunks.length, config.repoPath);
-        }
-        if (config.moduleScope) {
-          delegationPrompt += `\nTarget module: ${config.moduleScope}. Only analyze files under this directory.\n`;
-        }
-        if (config.claimsManifestPath && REFDOC_AWARE_AGENTS.has(agent.name)) {
-          delegationPrompt += buildRefDocPromptSuffix(config.claimsManifestPath);
-        }
+      const findings = parseFindingTags(result.text, agent.name);
+      for (const finding of findings) {
+        appendFinding(config.projectSlug, config.runId, finding);
+      }
 
-        // Inject uncovered files as priority targets for unchunked agents
-        if (injectScopeHint) {
-          const priorityFiles = babysitter.getUncoveredFilesForHint(50);
-          if (priorityFiles.length > 0) {
-            const relative = priorityFiles.map(f => f.replace(config.repoPath + '/', ''));
-            delegationPrompt +=
-              `\n\nPRIORITY FILES — The following files have not been examined by other agents yet. ` +
-              `Include them in your analysis where relevant to your domain:\n` +
-              relative.map(f => `  ${f}`).join('\n') + '\n';
-          }
-        }
+      // Write agent output envelope (inter-agent data exchange)
+      const agentData = parseAgentDataTags(result.text);
+      writeAgentOutputEnvelope(runDir, agent.name, config.runId, 'complete', agentData, findings);
 
-        const result = await runAgent(
-          agentToRun, delegationPrompt, config, status,
-          (s) => observer.updateAgent(agentLabel, s),
-          (e) => observer.recordFallback(e),
+      status.status = 'complete';
+      status.completedAt = new Date().toISOString();
+      status.durationMs = Date.now() - new Date(status.startedAt!).getTime();
+      status.findingCount = findings.length;
+      runState.recordCompletion(status.durationMs);
+
+      // Track budget
+      const agentTokens = status.tokenUsage.input + status.tokenUsage.output;
+      updateBudgetUsage(budget, agentTokens);
+      const budgetCheck = checkBudget(budget, 0);
+      if (!budgetCheck.ok) {
+        budgetExceeded = true;
+      }
+
+      const auditResult = await auditor.check(agentLabel, result, findings, status);
+      if (!auditResult.passed) {
+        process.stderr.write(
+          `  QUALITY WARNING [${agentLabel}]: ${auditResult.issues.length} issue(s), score: ${auditResult.score}/100\n`,
         );
-
-        const outputPath = join(config.sessionLogDir, `${formatTime()}_${agentLabel}.md`);
-        writeFileSync(outputPath, result.text);
-        status.outputFilePath = outputPath;
-        status.outputFileExists = true;
-        status.outputSizeBytes = Buffer.byteLength(result.text);
-
-        // Record coverage via babysitter (single source of truth)
-        const { capped: cappedLog, droppedCount } = capToolCallLog(result.toolCallLog);
-        if (droppedCount > 0) {
-          process.stderr.write(`  toolCallLog capped: ${droppedCount} entries had args dropped\n`);
-        }
-        if (babysittingEnabled) {
-          babysitter.recordAgentRun(agentLabel, cappedLog);
-        }
-
-        if (chunk) {
-          const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
-          status.coveragePercent = chunkEval.coveragePercent;
-        }
-
-        const findings = parseFindingTags(result.text, agent.name);
-        for (const finding of findings) {
-          appendFinding(config.projectSlug, config.runId, finding);
-        }
-
-        // Write agent output envelope (inter-agent data exchange)
-        const agentData = parseAgentDataTags(result.text);
-        writeAgentOutputEnvelope(runDir, agent.name, config.runId, 'complete', agentData, findings);
-
-        observer.completeAgent(agentLabel, findings.length, status.outputSizeBytes);
-
-        // Track budget
-        const agentTokens = status.tokenUsage.input + status.tokenUsage.output;
-        updateBudgetUsage(budget, agentTokens);
-        const budgetCheck = checkBudget(budget, 0);
-        if (budgetCheck.warning) {
-          process.stderr.write(`  BUDGET: ${budgetCheck.warning}\n`);
-        }
-        if (!budgetCheck.ok) {
-          process.stderr.write('  Token budget exceeded — stopping remaining agents.\n');
-          budgetExceeded = true;
-          break;
-        }
-
-        const auditResult = await auditor.check(agentLabel, result, findings, status);
-        if (!auditResult.passed) {
-          process.stderr.write(
-            `  QUALITY WARNING: ${auditResult.issues.length} issue(s), score: ${auditResult.score}/100\n`,
-          );
-        }
-      } catch (err: unknown) {
-        const msg = err instanceof Error ? err.message : String(err);
-        observer.failAgent(agentLabel, msg);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      status.status = 'failed';
+      status.error = msg;
+      status.completedAt = new Date().toISOString();
+      if (status.startedAt) {
+        status.durationMs = Date.now() - new Date(status.startedAt).getTime();
       }
     }
-  }
+  }));
+
+  await Promise.allSettled(tasks);
+  dashboard.teardown();
 
   // 8.5. Post-run finding deduplication
   const dedupResult = deduplicateFindings(findingsPath, runDir);
@@ -460,13 +509,26 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       filesTotal: allSourceFiles.length,
       retriesExecuted: babysitter.getRetriesExecuted(),
     },
-    agents: observer.toStatusArray(),
-    fallbackEvents: observer.getFallbackEvents(),
+    agents: runState.getAgents(),
+    fallbackEvents: runState.getFallbackEvents(),
     qualityAudit: auditor.getResults(),
   }, null, 2));
 
   // 11. Print final summary
-  observer.printFinalSummary();
+  ttyRenderer.clear();
+  const snap = runState.snapshot();
+  const completeCount = snap.agents.complete;
+  const failedCount = snap.agents.failed;
+  const totalTokens = snap.tokens.total;
+  process.stderr.write(`
+=== Orchestrated Run Summary ===
+Agents: ${completeCount}/${snap.agents.total} complete${failedCount > 0 ? `, ${failedCount} failed` : ''}
+Findings: ${snap.findings.total}
+Tokens: ${snap.tokens.input > 0 ? `${Math.round(snap.tokens.input / 1000)}k in / ${Math.round(snap.tokens.output / 1000)}k out` : 'N/A (CLI providers)'}
+Coverage: ${snap.coverage ? `${snap.coverage.actualPercent}% (${snap.coverage.filesExamined}/${snap.coverage.filesTotal} files)` : 'N/A'}
+Duration: ${Math.round(snap.elapsedMs / 1000)}s
+================================
+`);
 }
 
 // --- Helpers ---

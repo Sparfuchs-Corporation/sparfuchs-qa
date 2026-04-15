@@ -47,6 +47,8 @@ async function main(): Promise<void> {
   const coverageStrategy = coverageArg && coverageArg !== 'off'
     ? coverageArg as CoverageStrategy
     : coverageArg === 'off' ? undefined : undefined;
+  const concurrencyArg = args['concurrency'] ?? process.env.CONCURRENCY;
+  const concurrency = concurrencyArg ? parseInt(concurrencyArg, 10) : undefined;
 
   // Derive project slug from repo directory name
   const projectSlug = repoPath.split('/').pop()!.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -71,6 +73,7 @@ async function main(): Promise<void> {
     autoComplete,
     baseline,
     coverageStrategy,
+    concurrency,
   };
 
   try {
