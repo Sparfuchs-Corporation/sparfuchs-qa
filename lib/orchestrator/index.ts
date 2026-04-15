@@ -369,6 +369,9 @@ function buildDelegationPrompt(agent: AgentDefinition, config: OrchestrationConf
     `  ${outputPath}\n` +
     `This file must contain everything: every file you read, every grep you ran,\n` +
     `every finding with evidence, every clean check. This IS the forensic record.\n\n` +
+    `IMPORTANT — Do NOT invoke other AI CLIs or nested agents from Bash.\n` +
+    `Never run commands such as codex, claude, gemini, openclaw, aider, or similar.\n` +
+    `Perform the analysis yourself using only the tools already available in this session.\n\n` +
     `Target repo: ${config.repoPath}\n` +
     `Run ID: ${config.runId}\n` +
     `Project: ${config.projectSlug}`;
