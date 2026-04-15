@@ -127,8 +127,13 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
   const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet]);
 
-  // 6.5. Capability report for the primary provider
-  const primaryProvider = available[0];
+  // 6.5. Capability report for the selected provider when overridden,
+  // otherwise the first available provider in the fallback order.
+  const primaryProvider = (
+    config.providerOverride && available.includes(config.providerOverride)
+      ? config.providerOverride
+      : available[0]
+  );
   if (primaryProvider) {
     const primaryAdapter = getAdapter(primaryProvider);
     if (primaryAdapter.type === 'cli') {
