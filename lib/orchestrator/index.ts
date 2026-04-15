@@ -8,16 +8,17 @@ import { parseAgentsByNames, parsePhase1Agents, validateAgentIntegrity } from '.
 import { runAgent } from './agent-runner.js';
 import { ObservabilityTracker } from './observability.js';
 import { QualityAuditor } from './quality-auditor.js';
-import { parseFindingTags, appendFinding } from '../../scripts/qa-findings-manager.js';
+import { parseFindingTags, parseAgentDataTags, appendFinding, writeAgentOutputEnvelope } from '../../scripts/qa-findings-manager.js';
 import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
 import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
 import {
   registerAdapter, resolveCliProviders, printCapabilityReport, getAdapter,
 } from './adapters/index.js';
-import { estimateTokenCost, printBudgetPrompt, checkBudget, updateBudgetUsage, isAgentInBudget } from './token-budget.js';
+import { estimateTokenCost, printBudgetPrompt, checkBudget, updateBudgetUsage, isAgentInBudget, selectCoverageStrategy } from './token-budget.js';
 import { loadRulesCache, composeAgentPrompt } from './prompt-composer.js';
 import { deduplicateFindings } from './finding-deduplicator.js';
-import type { TokenBudget } from './types.js';
+import { CoverageBabysitter, getStrategyConfig, capToolCallLog } from './coverage-babysitter.js';
+import type { TokenBudget, CoverageStrategy } from './types.js';
 import { ApiAdapter } from './adapters/api-adapter.js';
 import { ClaudeCliAdapter } from './adapters/claude-cli-adapter.js';
 import { GeminiCliAdapter } from './adapters/gemini-cli-adapter.js';
@@ -123,9 +124,43 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     ...testabilityReport.uncheckable.largeFiles,
   ]);
 
-  // 6. Large codebase chunking
+  // 6. Large codebase chunking + coverage strategy
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
-  const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet]);
+  const strategy: CoverageStrategy = config.coverageStrategy
+    ?? modelsConfig.coverageStrategy
+    ?? 'balanced';
+  const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet], strategy);
+  const strategyConfig = getStrategyConfig(strategy);
+  const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig);
+
+  // 6.1. API-only enforcement for babysitting
+  let babysittingEnabled = true;
+  if (strategyConfig.requireApiProvider) {
+    const hasApiProvider = available.some(p => {
+      const cfg = modelsConfig.providers[p];
+      return cfg && isApiProvider(cfg);
+    });
+    if (!hasApiProvider) {
+      process.stderr.write(
+        '\nWARNING: Coverage babysitting requires API providers for tool call observability.\n' +
+        'No API provider available — running in degraded mode (no retry, no scope hints).\n' +
+        `Consider using --coverage sweep for CLI-only setups.\n\n`,
+      );
+      babysittingEnabled = false;
+
+      // One-time persisted notice
+      const noticeDir = join(process.env.HOME ?? '/tmp', '.sparfuchs-qa');
+      const noticePath = join(noticeDir, 'coverage-notice.json');
+      if (!existsSync(noticePath)) {
+        mkdirSync(noticeDir, { recursive: true });
+        writeFileSync(noticePath, JSON.stringify({
+          notice: 'CLI-only setup detected. Coverage babysitting requires API providers.',
+          recommendation: 'Use --coverage sweep for CLI-only environments.',
+          timestamp: new Date().toISOString(),
+        }, null, 2));
+      }
+    }
+  }
 
   // 6.5. Capability report for the selected provider when overridden,
   // otherwise the first available provider in the fallback order.
@@ -196,6 +231,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   process.stderr.write(`Agents: ${agents.length} | Mode: ${config.mode} | Repo: ${config.repoPath}\n`);
   process.stderr.write(`Classification: ${modelsConfig.dataClassification} | Redact secrets: ${modelsConfig.redactSecrets}\n`);
   process.stderr.write(`Compose: ${config.composeRules ? 'ON' : 'OFF'} | Auto-complete: ${config.autoComplete ? 'ON' : 'OFF'} | Baseline: ${config.baseline ? 'ON' : 'OFF'}\n`);
+  process.stderr.write(`Coverage: ${strategy} (target: ${strategyConfig.targetCoveragePercent}%) | Files: ${allSourceFiles.length}\n`);
   if (config.moduleScope) {
     process.stderr.write(`Module scope: ${config.moduleScope}\n`);
   }
@@ -210,8 +246,10 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const observer = new ObservabilityTracker();
   observer.setBudget(budget);
   const auditor = new QualityAuditor(config, modelsConfig);
+  let budgetExceeded = false;
 
   for (const agent of agents) {
+    if (budgetExceeded) break;
     if (agentsToSkip.has(agent.name)) {
       const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
       const status = observer.registerAgent(agent.name);
@@ -228,7 +266,18 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     }
 
     const shouldChunk = chunkPlan && isChunkedAgent(agent.name);
-    const chunks = shouldChunk ? chunkPlan.chunks : [null];
+    let chunks: Array<FileChunk | null> = shouldChunk ? [...chunkPlan.chunks] : [null];
+
+    // Apply maxChunksPerAgent for sweep mode
+    if (shouldChunk && strategyConfig.maxChunksPerAgent !== null) {
+      chunks = chunks.slice(0, strategyConfig.maxChunksPerAgent);
+    }
+
+    // Unchunked scope hints — inject priority files from babysitter gap data
+    const injectScopeHint = babysittingEnabled
+      && !shouldChunk
+      && strategyConfig.unchunkedScopeHint
+      && allSourceFiles.length > 50;
 
     for (const chunk of chunks) {
       const agentLabel = chunk
@@ -263,6 +312,18 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
           delegationPrompt += buildRefDocPromptSuffix(config.claimsManifestPath);
         }
 
+        // Inject uncovered files as priority targets for unchunked agents
+        if (injectScopeHint) {
+          const priorityFiles = babysitter.getUncoveredFilesForHint(50);
+          if (priorityFiles.length > 0) {
+            const relative = priorityFiles.map(f => f.replace(config.repoPath + '/', ''));
+            delegationPrompt +=
+              `\n\nPRIORITY FILES — The following files have not been examined by other agents yet. ` +
+              `Include them in your analysis where relevant to your domain:\n` +
+              relative.map(f => `  ${f}`).join('\n') + '\n';
+          }
+        }
+
         const result = await runAgent(
           agentToRun, delegationPrompt, config, status,
           (s) => observer.updateAgent(agentLabel, s),
@@ -275,20 +336,28 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         status.outputFileExists = true;
         status.outputSizeBytes = Buffer.byteLength(result.text);
 
+        // Record coverage via babysitter (single source of truth)
+        const { capped: cappedLog, droppedCount } = capToolCallLog(result.toolCallLog);
+        if (droppedCount > 0) {
+          process.stderr.write(`  toolCallLog capped: ${droppedCount} entries had args dropped\n`);
+        }
+        if (babysittingEnabled) {
+          babysitter.recordAgentRun(agentLabel, cappedLog);
+        }
+
         if (chunk) {
-          const filesInOutput = new Set<string>();
-          for (const file of chunk.files) {
-            if (result.text.includes(file) || result.text.includes(file.split('/').pop()!)) {
-              filesInOutput.add(file);
-            }
-          }
-          status.coveragePercent = Math.round((filesInOutput.size / chunk.files.length) * 100);
+          const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
+          status.coveragePercent = chunkEval.coveragePercent;
         }
 
         const findings = parseFindingTags(result.text, agent.name);
         for (const finding of findings) {
           appendFinding(config.projectSlug, config.runId, finding);
         }
+
+        // Write agent output envelope (inter-agent data exchange)
+        const agentData = parseAgentDataTags(result.text);
+        writeAgentOutputEnvelope(runDir, agent.name, config.runId, 'complete', agentData, findings);
 
         observer.completeAgent(agentLabel, findings.length, status.outputSizeBytes);
 
@@ -301,6 +370,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         }
         if (!budgetCheck.ok) {
           process.stderr.write('  Token budget exceeded — stopping remaining agents.\n');
+          budgetExceeded = true;
           break;
         }
 
@@ -325,6 +395,10 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       `(${dedupResult.removed} cross-agent duplicates merged)\n`,
     );
   }
+
+  // 8.6. Coverage report
+  babysitter.printReport();
+  babysitter.writeReport(runDir);
 
   // 9. Write quality audit results
   const auditPath = join(runDir, 'quality-audit.json');
@@ -354,6 +428,14 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       chunks: chunkPlan.chunks.length,
       excludedFiles: chunkPlan.excludedFiles.length,
     } : null,
+    coverage: {
+      strategy,
+      targetPercent: strategyConfig.targetCoveragePercent,
+      actualPercent: babysitter.getCoveragePercent(),
+      filesExamined: babysitter.getFilesExamined().size,
+      filesTotal: allSourceFiles.length,
+      retriesExecuted: babysitter.getRetriesExecuted(),
+    },
     agents: observer.toStatusArray(),
     fallbackEvents: observer.getFallbackEvents(),
     qualityAudit: auditor.getResults(),

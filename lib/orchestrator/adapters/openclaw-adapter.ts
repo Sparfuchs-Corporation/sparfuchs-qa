@@ -84,6 +84,7 @@ export class OpenClawAdapter implements AgentAdapter {
       text,
       usage: { inputTokens: 0, outputTokens: 0 },
       steps: [],
+      toolCallLog: [],
       finishReason: 'stop',
       provider: this.name,
       model: this.binary,

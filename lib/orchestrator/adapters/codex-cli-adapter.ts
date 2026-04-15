@@ -87,6 +87,7 @@ export class CodexCliAdapter implements AgentAdapter {
         text,
         usage: execution.usage,
         steps: [],
+        toolCallLog: [],
         finishReason: 'stop',
         provider: this.name,
         model: this.binary,

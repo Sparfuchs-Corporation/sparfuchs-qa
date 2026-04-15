@@ -1,12 +1,13 @@
 import * as readline from 'node:readline';
 import type {
   AgentDefinition, ModelsYaml, TokenBudget, TokenEstimate,
-  TokenBudgetConfig, ProviderName,
+  TokenBudgetConfig, ProviderName, CoverageStrategy,
 } from './types.js';
 import { isApiProvider, isCliProvider } from './types.js';
+import { getStrategyConfig } from './coverage-babysitter.js';
 
 // Average tokens per agent by tier (empirical estimates from QA runs)
-const AVG_TOKENS_PER_AGENT: Record<string, number> = {
+export const AVG_TOKENS_PER_AGENT: Record<string, number> = {
   heavy: 80_000,
   mid: 40_000,
   light: 15_000,
@@ -189,4 +190,39 @@ function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(0)}k`;
   return String(n);
+}
+
+// --- Coverage Strategy Selection ---
+
+const STRATEGY_LABELS: Array<{ key: CoverageStrategy; label: string }> = [
+  { key: 'sweep', label: 'Sweep     (~40% coverage, fast)' },
+  { key: 'balanced', label: 'Balanced  (~65% coverage)' },
+  { key: 'thorough', label: 'Thorough  (~85% coverage)' },
+  { key: 'exhaustive', label: 'Exhaustive (~95% coverage)' },
+];
+
+export async function selectCoverageStrategy(
+  defaultStrategy?: CoverageStrategy,
+): Promise<CoverageStrategy> {
+  const defaultIdx = defaultStrategy
+    ? STRATEGY_LABELS.findIndex(s => s.key === defaultStrategy) + 1
+    : 2; // balanced
+
+  process.stderr.write('\nCoverage depth:\n');
+  for (let i = 0; i < STRATEGY_LABELS.length; i++) {
+    const isDefault = i + 1 === defaultIdx;
+    process.stderr.write(`  ${i + 1}. ${STRATEGY_LABELS[i].label}${isDefault ? '  [default]' : ''}\n`);
+  }
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
+  const answer = await new Promise<string>(resolve => {
+    rl.question(`\nChoice [1-4, default=${defaultIdx}]: `, resolve);
+  });
+  rl.close();
+
+  const choice = parseInt(answer, 10);
+  if (choice >= 1 && choice <= STRATEGY_LABELS.length) {
+    return STRATEGY_LABELS[choice - 1].key;
+  }
+  return STRATEGY_LABELS[defaultIdx - 1].key;
 }

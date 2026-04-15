@@ -104,6 +104,7 @@ NO_INTERACTIVE=""
 COMPOSE_RULES=""
 AUTO_COMPLETE=""
 BASELINE=""
+COVERAGE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -126,6 +127,7 @@ while [[ $# -gt 0 ]]; do
     --compose-rules) COMPOSE_RULES="1"; shift ;;
     --auto-complete) AUTO_COMPLETE="1"; shift ;;
     --baseline)      BASELINE="1"; shift ;;
+    --coverage)      COVERAGE="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -582,6 +584,7 @@ else
   [[ -n "$COMPOSE_RULES" ]] && ORCH_ARGS+=(--compose-rules true)
   [[ -n "$AUTO_COMPLETE" ]] && ORCH_ARGS+=(--auto-complete true)
   [[ -n "$BASELINE" ]] && ORCH_ARGS+=(--baseline true)
+  [[ -n "$COVERAGE" ]] && ORCH_ARGS+=(--coverage "$COVERAGE")
   [[ -n "$PROVIDER" ]] && ORCH_ARGS+=(--provider "$PROVIDER")
   SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
   SPARFUCHS_CRED_PROFILE="${CRED_PROFILE:-}" \

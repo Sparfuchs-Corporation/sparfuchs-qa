@@ -5,7 +5,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runOrchestration } from '../lib/orchestrator/index.js';
-import type { OrchestrationConfig, ProviderName } from '../lib/orchestrator/types.js';
+import type { OrchestrationConfig, ProviderName, CoverageStrategy } from '../lib/orchestrator/types.js';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -43,6 +43,10 @@ async function main(): Promise<void> {
   const composeRules = args['compose-rules'] === 'true' || process.env.COMPOSE_RULES === 'true';
   const autoComplete = args['auto-complete'] === 'true' || process.env.QA_AUTO_COMPLETE === 'true';
   const baseline = args['baseline'] === 'true' || process.env.QA_BASELINE === 'true';
+  const coverageArg = args['coverage'] ?? process.env.COVERAGE;
+  const coverageStrategy = coverageArg && coverageArg !== 'off'
+    ? coverageArg as CoverageStrategy
+    : coverageArg === 'off' ? undefined : undefined;
 
   // Derive project slug from repo directory name
   const projectSlug = repoPath.split('/').pop()!.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -66,6 +70,7 @@ async function main(): Promise<void> {
     composeRules,
     autoComplete,
     baseline,
+    coverageStrategy,
   };
 
   try {

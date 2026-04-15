@@ -108,7 +108,7 @@ function countFilesByExtension(searchRoot: string): Map<string, number> {
   const counts = new Map<string, number>();
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/vendor/*" -not -path "*/__pycache__/*" -not -path "*/target/*" 2>/dev/null | sed 's/.*\\./\\./' | sort | uniq -c | sort -rn`,
+      `find "${searchRoot}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/vendor/*" -not -path "*/__pycache__/*" -not -path "*/target/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null | sed 's/.*\\./\\./' | sort | uniq -c | sort -rn`,
       { maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' },
     );
     for (const line of output.trim().split('\n').filter(Boolean)) {
@@ -257,7 +257,7 @@ function detectUncheckable(searchRoot: string): UncheckableReport {
   let totalFiles = 0;
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" 2>/dev/null | wc -l`,
+      `find "${searchRoot}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null | wc -l`,
       { encoding: 'utf8' },
     );
     totalFiles = parseInt(output.trim(), 10) || 0;
@@ -284,7 +284,7 @@ function detectUncheckable(searchRoot: string): UncheckableReport {
 function findMinifiedFiles(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( -name "*.min.js" -o -name "*.min.css" -o -name "*.bundle.js" -o -name "*.bundle.css" \\) -not -path "*/node_modules/*" 2>/dev/null`,
+      `find "${searchRoot}" -type f \\( -name "*.min.js" -o -name "*.min.css" -o -name "*.bundle.js" -o -name "*.bundle.css" \\) -not -path "*/node_modules/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8' },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -294,7 +294,7 @@ function findMinifiedFiles(searchRoot: string): string[] {
 function findGeneratedFiles(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `grep -rl --include="*.ts" --include="*.js" --include="*.tsx" --include="*.jsx" -m 1 -E "(// @generated|DO NOT EDIT|Auto-generated|This file is generated|GENERATED CODE)" "${searchRoot}" 2>/dev/null | head -100`,
+      `grep -rl --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.claude --exclude-dir=generated --include="*.ts" --include="*.js" --include="*.tsx" --include="*.jsx" -m 1 -E "(// @generated|DO NOT EDIT|Auto-generated|This file is generated|GENERATED CODE)" "${searchRoot}" 2>/dev/null | head -100`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8' },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -304,7 +304,7 @@ function findGeneratedFiles(searchRoot: string): string[] {
 function findBinaryAssets(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( -name "*.wasm" -o -name "*.so" -o -name "*.dll" -o -name "*.pyc" -o -name "*.class" -o -name "*.o" \\) -not -path "*/node_modules/*" 2>/dev/null`,
+      `find "${searchRoot}" -type f \\( -name "*.wasm" -o -name "*.so" -o -name "*.dll" -o -name "*.pyc" -o -name "*.class" -o -name "*.o" \\) -not -path "*/node_modules/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8' },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -326,7 +326,7 @@ function findVendoredDirs(searchRoot: string): string[] {
 function findLargeFiles(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( ${Object.keys(LANG_MAP).map(e => `-name "*${e}"`).join(' -o ')} \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -exec sh -c 'wc -l "$1" | awk "\\$1 > ${READ_TOOL_LINE_LIMIT} {print \\$2}"' _ {} \\; 2>/dev/null | head -50`,
+      `find "${searchRoot}" -type f \\( ${Object.keys(LANG_MAP).map(e => `-name "*${e}"`).join(' -o ')} \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -path "*/.claude/*" -not -path "*/generated/*" -exec sh -c 'wc -l "$1" | awk "\\$1 > ${READ_TOOL_LINE_LIMIT} {print \\$2}"' _ {} \\; 2>/dev/null | head -50`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8', timeout: 10000 },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -383,7 +383,7 @@ function detectTestFramework(repoPath: string): string | null {
 function countTestFiles(searchRoot: string): number {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( -name "*.test.*" -o -name "*.spec.*" -o -name "*_test.*" -o -name "test_*" \\) -not -path "*/node_modules/*" 2>/dev/null | wc -l`,
+      `find "${searchRoot}" -type f \\( -name "*.test.*" -o -name "*.spec.*" -o -name "*_test.*" -o -name "test_*" \\) -not -path "*/node_modules/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null | wc -l`,
       { encoding: 'utf8' },
     );
     return parseInt(output.trim(), 10) || 0;
@@ -393,7 +393,7 @@ function countTestFiles(searchRoot: string): number {
 function countSourceFiles(searchRoot: string): number {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( ${Object.keys(LANG_MAP).map(e => `-name "*${e}"`).join(' -o ')} \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -name "*.test.*" -not -name "*.spec.*" 2>/dev/null | wc -l`,
+      `find "${searchRoot}" -type f \\( ${Object.keys(LANG_MAP).map(e => `-name "*${e}"`).join(' -o ')} \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -path "*/.claude/*" -not -path "*/generated/*" -not -name "*.test.*" -not -name "*.spec.*" 2>/dev/null | wc -l`,
       { encoding: 'utf8' },
     );
     return parseInt(output.trim(), 10) || 0;

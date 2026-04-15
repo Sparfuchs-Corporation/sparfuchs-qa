@@ -69,6 +69,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
         text,
         usage: { inputTokens: 0, outputTokens: 0 }, // CLI doesn't expose token counts
         steps: [],
+        toolCallLog: [], // CLI has no tool call observability
         finishReason: 'stop',
         provider: this.name,
         model: this.binary,

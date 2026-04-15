@@ -115,6 +115,7 @@ export interface ModelsYaml {
   tiers: Record<ModelTier, TierModels>;
   agentOverrides: Record<string, AgentOverride>;
   tokenBudget?: TokenBudgetConfig;
+  coverageStrategy?: CoverageStrategy;
 }
 
 // --- Agent ---
@@ -132,16 +133,19 @@ export interface AgentDefinition {
 
 // --- Run Status ---
 
+export type AgentStatus = 'queued' | 'awaiting-data' | 'running' | 'retrying' | 'complete' | 'failed';
+
 export interface AgentRunStatus {
   agentName: string;
-  status: 'queued' | 'running' | 'retrying' | 'complete' | 'failed';
+  status: AgentStatus;
   provider: ProviderName;
   model: string;
   startedAt: string | null;
   completedAt: string | null;
+  lastHeartbeat: number | null;
   durationMs: number;
   findingCount: number;
-  tokenUsage: { input: number; output: number };
+  tokenUsage: { input: number; output: number; cacheRead: number; cacheCreation: number };
   retryCount: number;
   fallbacksUsed: ProviderName[];
   toolCallCount: number;
@@ -159,6 +163,7 @@ export interface AgentRunResult {
     toolCalls: Array<{ toolName: string }>;
     toolResults: Array<{ toolName: string }>;
   }>;
+  toolCallLog: ToolCallLogEntry[];
   finishReason: string;
   provider: ProviderName;
   model: string;
@@ -210,6 +215,7 @@ export interface OrchestrationConfig {
   autoComplete: boolean;
   baseline: boolean;
   previousFindingsPath?: string;
+  coverageStrategy?: CoverageStrategy;
 }
 
 // --- Credential Store ---
@@ -258,6 +264,60 @@ export interface ChunkPlan {
   chunkedAgents: string[];
   unchunkedAgents: string[];
   excludedFiles: string[];
+  strategy: CoverageStrategy;
+}
+
+// --- Coverage Strategy ---
+
+export type CoverageStrategy = 'sweep' | 'balanced' | 'thorough' | 'exhaustive';
+
+export interface CoverageStrategyConfig {
+  chunkSize: number;
+  maxChunkSize: number;
+  maxChunksPerAgent: number | null;
+  targetCoveragePercent: number;
+  retryLowCoverageChunks: boolean;
+  lowCoverageThreshold: number;
+  maxRetriesPerChunk: number;
+  retryBackoffMs: number;
+  unchunkedScopeHint: boolean;
+  requireApiProvider: boolean;
+}
+
+export interface CoverageEstimate {
+  strategy: CoverageStrategy;
+  totalFiles: number;
+  checkableFiles: number;
+  chunksPerAgent: number;
+  totalChunkedInvocations: number;
+  estimatedCoveragePercent: number;
+  warnings: string[];
+}
+
+export interface CoverageReport {
+  strategy: CoverageStrategy;
+  targetPercent: number;
+  actualPercent: number;
+  totalFiles: number;
+  filesExaminedCount: number;
+  uncoveredFiles: string[];
+  retriesExecuted: number;
+  byAgent: Array<{ agent: string; filesExamined: number }>;
+}
+
+// --- Agent Output Envelope (inter-agent data exchange) ---
+
+export interface AgentOutputEnvelope {
+  agent: string;
+  runId: string;
+  completedAt: string;
+  status: 'complete' | 'failed' | 'partial';
+  data: Record<string, unknown>;
+  findingSummary: {
+    total: number;
+    bySeverity: Record<string, number>;
+    byCategory: Record<string, number>;
+  };
 }
 
 // --- Testability Pre-Flight ---

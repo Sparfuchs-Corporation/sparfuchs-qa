@@ -118,6 +118,7 @@ export class ApiAdapter implements AgentAdapter {
         toolCalls: s.toolCalls.map(tc => ({ toolName: tc.toolName })),
         toolResults: s.toolResults.map(tr => ({ toolName: tr.toolName })),
       })),
+      toolCallLog,
       finishReason: result.finishReason,
       provider: this.name,
       model: status.model,
