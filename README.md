@@ -32,7 +32,7 @@ make qa-quick
 make qa-review REPO=/path/to/target/repo
 ```
 
-For direct CLI use, `qa-review` supports Claude in direct mode and supports Codex through the orchestrated engine path with `ENGINE=orchestrated PROVIDER=codex-cli`.
+For direct CLI use, `qa-review` supports Claude in direct mode and supports Codex through the orchestrated engine path with `ENGINE=orchestrated PROVIDER=codex-cli`. In orchestrated mode, the selected `PROVIDER` now drives the live status provider label consistently, including agents that are skipped before execution.
 
 ## Key Paths
 

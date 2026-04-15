@@ -8,11 +8,13 @@
  *   QA_EVOLVE_DRY=1 npx tsx scripts/qa-evolve-v2.ts --project the-forge
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
 import type { FindingRegistryEntry, EvolutionPattern, FindingSeverity, QaRunMeta } from '../lib/types.js';
 
-const QA_DATA_ROOT = join(import.meta.dirname, '..', 'qa-data');
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const QA_DATA_ROOT = join(MODULE_DIR, '..', 'qa-data');
 const DRY_RUN = process.env.QA_EVOLVE_DRY === '1';
 
 function parseArgs(): { project: string } {

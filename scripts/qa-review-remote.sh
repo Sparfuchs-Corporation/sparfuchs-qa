@@ -569,17 +569,21 @@ if [[ "${ENGINE:-claude}" == "claude" ]]; then
 else
   # Multi-LLM orchestrated engine (supports API + CLI providers)
   echo "Engine: orchestrated (multi-provider)"
+  ORCH_ARGS=(
+    --repo "$REPO"
+    --sparfuchs-root "$SPARFUCHS_ROOT"
+    --reports-dir "$REPORTS_DIR"
+    --run-id "$RUN_ID"
+    --mode "$MODE"
+    --user-prompt "$USER_PROMPT"
+  )
+  [[ -n "$MODULE" ]] && ORCH_ARGS+=(--module "$MODULE")
+  [[ -n "$AGENTS" ]] && ORCH_ARGS+=(--selected-agents "$AGENTS")
+  [[ -n "$COMPOSE_RULES" ]] && ORCH_ARGS+=(--compose-rules true)
+  [[ -n "$AUTO_COMPLETE" ]] && ORCH_ARGS+=(--auto-complete true)
+  [[ -n "$BASELINE" ]] && ORCH_ARGS+=(--baseline true)
+  [[ -n "$PROVIDER" ]] && ORCH_ARGS+=(--provider "$PROVIDER")
   SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
   SPARFUCHS_CRED_PROFILE="${CRED_PROFILE:-}" \
-  npx tsx "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" \
-    --repo "$REPO" \
-    --sparfuchs-root "$SPARFUCHS_ROOT" \
-    --reports-dir "$REPORTS_DIR" \
-    --run-id "$RUN_ID" \
-    --mode "$MODE" \
-    --user-prompt "$USER_PROMPT" \
-    ${COMPOSE_RULES:+--compose-rules true} \
-    ${AUTO_COMPLETE:+--auto-complete true} \
-    ${BASELINE:+--baseline true} \
-    ${PROVIDER:+--provider "$PROVIDER"}
+  npx tsx "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" "${ORCH_ARGS[@]}"
 fi

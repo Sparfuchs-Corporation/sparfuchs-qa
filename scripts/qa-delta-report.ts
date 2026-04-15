@@ -7,10 +7,12 @@
  *   npx tsx scripts/qa-delta-report.ts --project the-forge --output delta.md
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { QaFinding, RunDelta, QaRunMeta } from '../lib/types.js';
 
-const QA_DATA_ROOT = join(import.meta.dirname, '..', 'qa-data');
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const QA_DATA_ROOT = join(MODULE_DIR, '..', 'qa-data');
 
 function parseArgs(): { project: string; runId?: string; output?: string } {
   const args = process.argv.slice(2);

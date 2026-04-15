@@ -6,10 +6,12 @@
  *   npx tsx scripts/qa-cleanup.ts --project the-forge --older-than 90d
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { FindingRegistryEntry } from '../lib/types.js';
 
-const QA_DATA_ROOT = join(import.meta.dirname, '..', 'qa-data');
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const QA_DATA_ROOT = join(MODULE_DIR, '..', 'qa-data');
 const CLOSED_RETENTION_DAYS = 90;
 
 function parseArgs(): { project: string; keep: number } {

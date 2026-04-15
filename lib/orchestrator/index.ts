@@ -4,7 +4,7 @@ import * as readline from 'node:readline';
 import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
 import { isApiProvider } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
-import { parsePhase1Agents, validateAgentIntegrity } from './agent-parser.js';
+import { parseAgentsByNames, parsePhase1Agents, validateAgentIntegrity } from './agent-parser.js';
 import { runAgent } from './agent-runner.js';
 import { ObservabilityTracker } from './observability.js';
 import { QualityAuditor } from './quality-auditor.js';
@@ -76,7 +76,9 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
   // 4. Parse agents and validate integrity
   const agentsDir = join(config.repoPath, '.claude', 'agents');
-  const agents = parsePhase1Agents(agentsDir, modelsConfig.agentOverrides);
+  const agents = config.selectedAgents?.length
+    ? parseAgentsByNames(agentsDir, config.selectedAgents, modelsConfig.agentOverrides)
+    : parsePhase1Agents(agentsDir, modelsConfig.agentOverrides);
   const hashesPath = join(config.sparfuchsRoot, 'config', 'agent-hashes.json');
   const integrity = validateAgentIntegrity(agents, hashesPath);
   if (!integrity.valid) {
@@ -125,8 +127,13 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
   const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet]);
 
-  // 6.5. Capability report for the primary provider
-  const primaryProvider = available[0];
+  // 6.5. Capability report for the selected provider when overridden,
+  // otherwise the first available provider in the fallback order.
+  const primaryProvider = (
+    config.providerOverride && available.includes(config.providerOverride)
+      ? config.providerOverride
+      : available[0]
+  );
   if (primaryProvider) {
     const primaryAdapter = getAdapter(primaryProvider);
     if (primaryAdapter.type === 'cli') {
@@ -208,6 +215,11 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     if (agentsToSkip.has(agent.name)) {
       const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
       const status = observer.registerAgent(agent.name);
+      const resolved = resolveModelForAgent(
+        agent.name, agent.tier, modelsConfig, config.providerOverride,
+      );
+      status.provider = resolved.provider;
+      status.model = resolved.model;
       status.status = 'complete';
       status.error = `Skipped: ${prediction?.reason ?? 'predicted ineffective or CLI-incompatible'}`;
       status.completedAt = new Date().toISOString();
@@ -362,6 +374,9 @@ function buildDelegationPrompt(agent: AgentDefinition, config: OrchestrationConf
     `  ${outputPath}\n` +
     `This file must contain everything: every file you read, every grep you ran,\n` +
     `every finding with evidence, every clean check. This IS the forensic record.\n\n` +
+    `IMPORTANT — Do NOT invoke other AI CLIs or nested agents from Bash.\n` +
+    `Never run commands such as codex, claude, gemini, openclaw, aider, or similar.\n` +
+    `Perform the analysis yourself using only the tools already available in this session.\n\n` +
     `Target repo: ${config.repoPath}\n` +
     `Run ID: ${config.runId}\n` +
     `Project: ${config.projectSlug}`;

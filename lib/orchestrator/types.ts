@@ -202,6 +202,7 @@ export interface OrchestrationConfig {
   providerOverride?: ProviderName;
   modelsConfig: ModelsYaml;
   userPrompt: string;
+  selectedAgents?: string[];
   moduleScope?: string;
   referenceDocPaths?: string[];
   claimsManifestPath?: string;

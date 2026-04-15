@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type {
   QaFinding,
   FindingRegistryEntry,
@@ -10,7 +11,8 @@ import type {
   ProjectConfig,
 } from '../lib/types.js';
 
-const QA_DATA_ROOT = join(import.meta.dirname, '..', 'qa-data');
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const QA_DATA_ROOT = join(MODULE_DIR, '..', 'qa-data');
 
 // --- Path helpers ---
 

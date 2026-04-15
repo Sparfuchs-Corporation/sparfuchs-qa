@@ -6,10 +6,12 @@
  *   npx tsx scripts/qa-firestore-sync.ts --project the-forge --run qa-20260404-0800-ab12
  */
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { QaFinding, QaRunMeta, RunDelta, EvolutionPattern, QaIngestPayload } from '../lib/types.js';
 
-const QA_DATA_ROOT = join(import.meta.dirname, '..', 'qa-data');
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const QA_DATA_ROOT = join(MODULE_DIR, '..', 'qa-data');
 
 function parseArgs(): { project: string; runId?: string; latest: boolean } {
   const args = process.argv.slice(2);
