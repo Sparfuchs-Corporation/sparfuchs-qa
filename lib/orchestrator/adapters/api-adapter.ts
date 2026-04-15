@@ -129,6 +129,7 @@ export class ApiAdapter implements AgentAdapter {
       xai: 'XAI_API_KEY',
       google: 'GOOGLE_GENERATIVE_AI_API_KEY',
       anthropic: 'ANTHROPIC_API_KEY',
+      openai: 'OPENAI_API_KEY',
     };
     return ENV_MAP[this.name] ?? `${this.name.toUpperCase()}_API_KEY`;
   }

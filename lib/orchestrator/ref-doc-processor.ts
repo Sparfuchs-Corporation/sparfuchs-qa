@@ -6,7 +6,7 @@ import type { DocClaim, DocClaimType, ModelsYaml, ApiProviderName } from './type
 import { isApiProvider } from './types.js';
 import { toModelId } from './adapters/api-adapter.js';
 
-const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic']);
+const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic', 'openai']);
 
 const MAX_CHUNK_CHARS = 30_000;
 const OVERLAP_CHARS = 2_000;
