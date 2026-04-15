@@ -2,9 +2,12 @@
 // qa-review-orchestrated.ts — CLI entry point for the multi-LLM orchestrated engine.
 // Invoked by qa-review-remote.sh when ENGINE=orchestrated.
 
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { runOrchestration } from '../lib/orchestrator/index.js';
 import type { OrchestrationConfig, ProviderName } from '../lib/orchestrator/types.js';
+
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
 function parseArgs(argv: string[]): Record<string, string> {
   const args: Record<string, string> = {};
@@ -27,7 +30,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  const sparfuchsRoot = args['sparfuchs-root'] ?? join(import.meta.dirname, '..');
+  const sparfuchsRoot = args['sparfuchs-root'] ?? join(MODULE_DIR, '..');
   const reportsDir = args['reports-dir'] ?? join(sparfuchsRoot, 'qa-reports');
   const runId = args['run-id'] ?? `qa-${new Date().toISOString().replace(/[T:.-]/g, '').slice(0, 12)}-${Math.random().toString(16).slice(2, 6)}`;
   const mode = (args['mode'] ?? 'full') as OrchestrationConfig['mode'];

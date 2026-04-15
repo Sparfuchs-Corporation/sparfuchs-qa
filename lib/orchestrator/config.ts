@@ -1,12 +1,14 @@
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { ModelsYaml, ModelTier, ProviderName, ApiProviderName } from './types.js';
 import { isApiProvider, isCliProvider } from './types.js';
 import { resolveApiKey } from './credential-store.js';
 
-const DEFAULT_CONFIG_PATH = join(import.meta.dirname, '../../config/models.yaml');
+const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_CONFIG_PATH = join(MODULE_DIR, '../../config/models.yaml');
 
 // --- Zod schema ---
 
