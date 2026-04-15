@@ -193,9 +193,13 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
 
   ENGINE_OPTIONS=()
   ENGINE_OPTION_LABELS=()
+
+  # Orchestrated is always option 1 (default)
+  opt_idx=1
+  ENGINE_OPTIONS+=("orchestrated")
+  ENGINE_OPTION_LABELS+=("Orchestrated — multi-provider engine")
   DEFAULT_ENGINE_IDX=1
 
-  opt_idx=0
   for i in "${!DETECTED_CLI_NAMES[@]}"; do
     cli="${DETECTED_CLI_NAMES[$i]}"
     label="${DETECTED_CLI_LABELS[$i]}"
@@ -207,17 +211,11 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
     if [[ "$cli" == "claude" ]]; then
       ENGINE_OPTIONS+=("claude-direct")
       ENGINE_OPTION_LABELS+=("Claude CLI — direct mode $label")
-      DEFAULT_ENGINE_IDX=$opt_idx
     else
       ENGINE_OPTIONS+=("$cli")
       ENGINE_OPTION_LABELS+=("$label — orchestrated mode")
     fi
   done
-
-  # Always add orchestrated multi-provider as last option
-  ((opt_idx++))
-  ENGINE_OPTIONS+=("orchestrated")
-  ENGINE_OPTION_LABELS+=("Orchestrated — multi-provider engine")
 
   for i in "${!ENGINE_OPTIONS[@]}"; do
     idx=$((i + 1))
@@ -243,8 +241,8 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
       PROVIDER="$(cli_to_provider "$selected")"
     fi
   else
-    echo "Invalid selection, using default (claude)."
-    ENGINE="claude"
+    echo "Invalid selection, using default (orchestrated)."
+    ENGINE="orchestrated"
   fi
 elif [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -eq 0 ]]; then
   # No CLIs detected — default to orchestrated
@@ -253,7 +251,7 @@ elif [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -e
   echo "Defaulting to orchestrated engine (requires API keys)."
   ENGINE="orchestrated"
 fi
-ENGINE="${ENGINE:-claude}"
+ENGINE="${ENGINE:-orchestrated}"
 
 # --- Interactive scan-type confirmation ---
 EXPLICIT_MODE_FLAG=""
