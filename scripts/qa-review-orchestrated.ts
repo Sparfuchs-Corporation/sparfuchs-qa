@@ -36,6 +36,7 @@ async function main(): Promise<void> {
   const mode = (args['mode'] ?? 'full') as OrchestrationConfig['mode'];
   const provider = args['provider'] as ProviderName | undefined;
   const userPrompt = args['user-prompt'] ?? `Run a QA review for this repository.`;
+  const moduleScope = args['module'];
   const selectedAgents = args['selected-agents']
     ? args['selected-agents'].split(',').map(s => s.trim()).filter(Boolean)
     : undefined;
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
     modelsConfig: undefined as never, // loaded by runOrchestration
     userPrompt,
     selectedAgents,
+    moduleScope,
     composeRules,
     autoComplete,
     baseline,

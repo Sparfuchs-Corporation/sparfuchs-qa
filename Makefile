@@ -21,6 +21,7 @@ qa-review:
 		--repo "$(REPO)" \
 		$(if $(FULL),--full) \
 		$(if $(AUTH),--auth) \
+		$(if $(AGENTS),--agents "$(AGENTS)") \
 		$(if $(TRAINING),--training) \
 		$(if $(DOCS),--docs) \
 		$(if $(MODULE),--module "$(MODULE)") \

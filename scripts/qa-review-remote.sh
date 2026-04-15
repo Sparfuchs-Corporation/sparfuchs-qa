@@ -578,6 +578,7 @@ else
     --run-id "$RUN_ID" \
     --mode "$MODE" \
     --user-prompt "$USER_PROMPT" \
+    ${MODULE:+--module "$MODULE"} \
     ${AGENTS:+--selected-agents "$AGENTS"} \
     ${COMPOSE_RULES:+--compose-rules true} \
     ${AUTO_COMPLETE:+--auto-complete true} \

@@ -99,7 +99,15 @@ make qa-stubs REPO=/path/to/project
 Run only specific agents by name.
 
 ```bash
-make qa-review REPO=/path/to/project --agents "security-reviewer,rbac-reviewer"
+make qa-review REPO=/path/to/project AGENTS="security-reviewer,rbac-reviewer"
+```
+
+### Option I: Module-Scoped Review
+
+Limit the review to a subdirectory when you only need coverage for one module or app.
+
+```bash
+make qa-review REPO=/path/to/project ENGINE=orchestrated PROVIDER=codex-cli MODULE="apps/web"
 ```
 
 ### Optional Metadata
@@ -344,7 +352,7 @@ The credential file is written to `/tmp/sparfuchs-qa-creds-{runid}.json` with `0
 
 | | Build Check | Diff Review | Full Audit | Full + Auth | Training | Docs | Selective | Stubs |
 |---|---|---|---|---|---|---|---|---|
-| **Command** | `make qa-build-check REPO=...` | `make qa-review REPO=...` | `+ FULL=1` | `+ FULL=1 AUTH=1` | `make qa-training REPO=...` | `make qa-docs REPO=...` | `+ --agents "..."` | `make qa-stubs REPO=...` |
+| **Command** | `make qa-build-check REPO=...` | `make qa-review REPO=...` | `+ FULL=1` | `+ FULL=1 AUTH=1` | `make qa-training REPO=...` | `make qa-docs REPO=...` | `+ AGENTS="..."` | `make qa-stubs REPO=...` |
 | **Scope** | Build pipeline only | Changed files only | All source files | All source files | All source files | All source files | Specified agents | All source files |
 | **Agents** | `build-verifier` only | Risk-based subset | All 37 agents | All 37 + auth-aware | 37 + documentation agents | 37 + documentation agents | Selected subset | All 37 agents |
 | **Duration** | 2-5 minutes | 5-15 minutes | 30-60+ minutes | 30-60+ minutes | 15-30 minutes | 15-30 minutes | 5-20 minutes | 10-25 minutes |
