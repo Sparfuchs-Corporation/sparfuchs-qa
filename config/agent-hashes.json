@@ -1,9 +1,11 @@
 {
   "code-reviewer": "98026e00dd9ca8659861c6984876e68c16d1b8f136840d289f323e882ce414dc",
   "security-reviewer": "fd63b0de8ede87bafa12d2e8359378639a48bd3936c1acfc81b2849df82a57e0",
+  "observability-auditor": "b58b2347424d2251390e52eb4a9ac55ed881691bfce2b24f66a2e30cc712ac70",
+  "workflow-extractor": "88119e1ab9753eba060b1a3138efbc1358d4c675387d65f2ac7369623c929a2b",
   "ui-intent-verifier": "984ec3605059808b5a41433f32a0c301b157c975ee9dc5ae3a3dbda9cb06dcaa",
   "qa-gap-analyzer": "00e186e0ba0e5c050a9408e890abbfe9bbf2c78958a379a30f6f4c4468aaadcc",
-  "release-gate-synthesizer": "cb05f4800df630cb5ec6c1c13fb6f132af2cb3f177249335e55ae095ff43303a",
+  "release-gate-synthesizer": "7d82d387f2ef3b1c70bbd61584bcfb4087f3c4958f98b5f5c6405862ac7ec63a",
   "contract-reviewer": "eeb0368f9a3fb7d50d9592d040d80543240fc91e4e447c93350f92792ef846e9",
   "spec-verifier": "872062aa20803d04e9d241bf754163eedfaab98424bfe34fd04c86f151405496"
 }

@@ -78,18 +78,18 @@ export async function printBudgetPrompt(
   const liteCount = budgetConfig.presets.lite.length;
 
   process.stderr.write('Select budget mode:\n');
-  process.stderr.write(`  1. Full audit (${estimate.agentCount} agents)\n`);
-  process.stderr.write(`  2. Standard (${standardCount} core agents)\n`);
-  process.stderr.write(`  3. Lite (${liteCount} critical agents)\n`);
-  process.stderr.write(`  4. Custom token cap\n`);
-  process.stderr.write(`  5. No limit (default)\n`);
+  process.stderr.write(`  1. No limit — all ${estimate.agentCount} agents, no token cap (default)\n`);
+  process.stderr.write(`  2. Full audit — all ${estimate.agentCount} agents, capped at ${formatTokens(budgetConfig.defaultCap)}\n`);
+  process.stderr.write(`  3. Standard — ${standardCount} core agents\n`);
+  process.stderr.write(`  4. Lite — ${liteCount} critical agents only\n`);
+  process.stderr.write(`  5. Custom token cap\n`);
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stderr });
   const answer = await new Promise<string>(resolve => {
-    rl.question('\nChoice [1-5, default=5]: ', resolve);
+    rl.question('\nChoice [1-5, default=1]: ', resolve);
   });
 
-  const choice = parseInt(answer, 10) || 5;
+  const choice = parseInt(answer, 10) || 1;
 
   let budget: TokenBudget;
 
@@ -105,6 +105,15 @@ export async function printBudgetPrompt(
 
     case 2:
       budget = {
+        cap: budgetConfig.defaultCap,
+        used: 0,
+        preset: 'full',
+        agentSet: agents.map(a => a.name),
+      };
+      break;
+
+    case 3:
+      budget = {
         cap: 0,
         used: 0,
         preset: 'standard',
@@ -112,7 +121,7 @@ export async function printBudgetPrompt(
       };
       break;
 
-    case 3:
+    case 4:
       budget = {
         cap: 0,
         used: 0,
@@ -121,7 +130,7 @@ export async function printBudgetPrompt(
       };
       break;
 
-    case 4: {
+    case 5: {
       const capAnswer = await new Promise<string>(resolve => {
         rl.question('Token cap (e.g., 500000): ', resolve);
       });
@@ -137,7 +146,7 @@ export async function printBudgetPrompt(
 
     default:
       budget = {
-        cap: budgetConfig.defaultCap,
+        cap: 0,
         used: 0,
         preset: 'full',
         agentSet: agents.map(a => a.name),

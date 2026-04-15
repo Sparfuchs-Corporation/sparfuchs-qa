@@ -245,11 +245,27 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   // 8. Run agents (with chunking support)
   const observer = new ObservabilityTracker();
   observer.setBudget(budget);
+  observer.setupKeyboardInput();
   const auditor = new QualityAuditor(config, modelsConfig);
   let budgetExceeded = false;
 
   for (const agent of agents) {
     if (budgetExceeded) break;
+
+    // Graceful quit — finish loop, write partial results
+    if (observer.isQuitRequested()) {
+      process.stderr.write('\nGraceful shutdown requested — skipping remaining agents.\n');
+      break;
+    }
+
+    // Pause — wait until resumed
+    while (observer.isPaused() && !observer.isQuitRequested()) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    if (observer.isQuitRequested()) {
+      process.stderr.write('\nGraceful shutdown requested — skipping remaining agents.\n');
+      break;
+    }
     if (agentsToSkip.has(agent.name)) {
       const prediction = testabilityReport.agentPredictions.find(p => p.agentName === agent.name);
       const status = observer.registerAgent(agent.name);
