@@ -312,7 +312,7 @@ case "$MODE" in
     SKILL_SRC="$SPARFUCHS_ROOT/.claude/skills/qa-docs/SKILL.md"
     REPORTS_DIR="$SPARFUCHS_ROOT/architecture-reports"
     ;;
-  review)
+  review|full)
     # Main qa-review skill (unchanged) — training/docs are add-ons via prompt flags
     REPORTS_DIR="$SPARFUCHS_ROOT/qa-reports"
     ;;
@@ -373,7 +373,7 @@ cleanup() {
     docs)
       rm -f "$REPO/.claude/agents/architecture-doc-builder.md"
       ;;
-    review)
+    review|full)
       for f in "${AGENT_FILES[@]}"; do
         rm -f "$REPO/.claude/agents/$f"
       done
@@ -477,7 +477,7 @@ case "$MODE" in
   docs)
     USER_PROMPT="Generate architecture documentation for this repository."
     ;;
-  review)
+  review|full)
     if [[ -n "$FULL" ]]; then
       USER_PROMPT="Run /qa-review --full for this repository."
     else
@@ -509,7 +509,7 @@ fi
 if [[ -n "$CRED_FILE" ]]; then
   USER_PROMPT="$USER_PROMPT Credentials file: $CRED_FILE"
 fi
-if [[ -n "$MODULE" && "$MODE" == "review" ]]; then
+if [[ -n "$MODULE" && ( "$MODE" == "review" || "$MODE" == "full" ) ]]; then
   USER_PROMPT="$USER_PROMPT SCOPE: Only analyze files under $MODULE/"
 fi
 if [[ -n "$REF_DOCS" ]]; then
@@ -522,7 +522,7 @@ case "$MODE" in
   selective) DISPLAY_MODE="selective: $AGENTS" ;;
   training)  DISPLAY_MODE="standalone training" ;;
   docs)      DISPLAY_MODE="standalone architecture docs" ;;
-  review)
+  review|full)
     DISPLAY_MODE="${FULL:-diff review}"
     [[ -n "$FULL" ]] && DISPLAY_MODE="full audit"
     [[ -n "$TRAINING" ]] && DISPLAY_MODE="$DISPLAY_MODE + training"
