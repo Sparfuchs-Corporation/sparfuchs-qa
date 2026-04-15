@@ -15,6 +15,7 @@ export class ObservabilityTracker {
   private isTTY = process.stderr.isTTY ?? false;
   private tableLines = 0; // lines drawn by last renderStatusTable call
   private budget: TokenBudget | null = null;
+  private refreshTimer: NodeJS.Timeout | null = null;
 
   setBudget(budget: TokenBudget): void {
     this.budget = budget;
@@ -49,6 +50,8 @@ export class ObservabilityTracker {
     status.status = 'running';
     status.startedAt = new Date().toISOString();
 
+    this.ensureRefreshLoop();
+
     if (this.isTTY) {
       this.renderStatusTable();
     } else {
@@ -64,6 +67,8 @@ export class ObservabilityTracker {
   updateAgent(name: string, update: Partial<AgentRunStatus>): void {
     const status = this.agents.get(name)!;
     Object.assign(status, update);
+
+    this.ensureRefreshLoop();
 
     if (this.isTTY) {
       this.renderStatusTable();
@@ -95,6 +100,8 @@ export class ObservabilityTracker {
         `${Math.round(status.durationMs / 1000)}s${fallbackNote}\n`
       );
     }
+
+    this.maybeStopRefreshLoop();
   }
 
   failAgent(name: string, error: string): void {
@@ -111,6 +118,8 @@ export class ObservabilityTracker {
     } else {
       process.stderr.write(`\n[${this.timestamp()}] FAILED: ${error}\n`);
     }
+
+    this.maybeStopRefreshLoop();
   }
 
   recordFallback(event: FallbackEvent): void {
@@ -200,10 +209,14 @@ export class ObservabilityTracker {
     // Footer
     const complete = statuses.filter(s => s.status === 'complete').length;
     const running = statuses.filter(s => s.status === 'running').length;
+    const retrying = statuses.filter(s => s.status === 'retrying').length;
     const failed = statuses.filter(s => s.status === 'failed').length;
     const elapsed = Math.round((Date.now() - this.runStartTime) / 1000);
     lines.push('');
-    lines.push(`${complete} complete | ${running} running | ${failed} failed | ${elapsed}s elapsed`);
+    lines.push(
+      `${complete} complete | ${running} running | ${retrying} retrying | ` +
+      `${failed} failed | ${elapsed}s elapsed | refresh 1s`
+    );
 
     const output = lines.join('\n') + '\n';
     process.stderr.write(output);
@@ -230,6 +243,8 @@ export class ObservabilityTracker {
   // --- Summary ---
 
   printFinalSummary(): void {
+    this.stopRefreshLoop();
+
     // Clear TTY table before printing final summary
     if (this.isTTY && this.tableLines > 0) {
       process.stderr.write(`\x1b[${this.tableLines}A\x1b[J`);
@@ -286,5 +301,35 @@ Duration: ${Math.round(totalDuration / 1000)}s
   private formatTokens(t: { input: number; output: number }): string {
     const fmt = (n: number) => n > 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
     return `${fmt(t.input)} in / ${fmt(t.output)} out`;
+  }
+
+  private ensureRefreshLoop(): void {
+    if (!this.isTTY || this.refreshTimer) return;
+    this.refreshTimer = setInterval(() => {
+      if (!this.hasActiveAgents()) {
+        this.stopRefreshLoop();
+        return;
+      }
+      this.renderStatusTable();
+    }, 1000);
+  }
+
+  private maybeStopRefreshLoop(): void {
+    if (!this.hasActiveAgents()) {
+      this.stopRefreshLoop();
+    }
+  }
+
+  private stopRefreshLoop(): void {
+    if (this.refreshTimer) {
+      clearInterval(this.refreshTimer);
+      this.refreshTimer = null;
+    }
+  }
+
+  private hasActiveAgents(): boolean {
+    return [...this.agents.values()].some(
+      s => s.status === 'running' || s.status === 'retrying'
+    );
   }
 }
