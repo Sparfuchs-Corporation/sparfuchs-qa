@@ -24,7 +24,7 @@ export class GeminiCliAdapter implements AgentAdapter {
   getCapabilities(): AdapterCapabilities {
     return {
       systemPromptFile: false,
-      addDir: false,
+      addDir: true,
       agentDeployment: false,
       toolLogging: false,
       toolControl: false,
@@ -37,16 +37,6 @@ export class GeminiCliAdapter implements AgentAdapter {
     // System prompt must be inlined
     if (agent.systemPrompt) {
       adaptations.push('System prompt inlined into user prompt');
-    }
-
-    // Agents that need --add-dir are incompatible
-    if (ADDDIR_REQUIRED_AGENTS.has(agent.name) && config.claimsManifestPath) {
-      return {
-        agentName: agent.name,
-        status: 'skipped',
-        adaptations: [],
-        skipReason: 'Requires --add-dir for qa-data (not supported by Gemini CLI)',
-      };
     }
 
     // @agent-name references won't work — adapted but functional
@@ -80,7 +70,12 @@ export class GeminiCliAdapter implements AgentAdapter {
     // Inline system prompt since Gemini CLI doesn't support system prompt files
     const combinedPrompt = buildInlinedPrompt(agent.systemPrompt, delegationPrompt);
 
-    const args = ['--sandbox', combinedPrompt];
+    const args = [
+      '--sandbox',
+      '--add-dir', config.reportsDir ?? config.sessionLogDir,
+      '--add-dir', config.qaDataRoot,
+      combinedPrompt,
+    ];
     const text = await spawnCli(this.binary, args, config.repoPath);
 
     status.durationMs = Date.now() - startTime;

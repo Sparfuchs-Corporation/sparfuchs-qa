@@ -101,6 +101,9 @@ DOCS=""
 REF_DOCS=""
 CRED_PROFILE=""
 NO_INTERACTIVE=""
+COMPOSE_RULES=""
+AUTO_COMPLETE=""
+BASELINE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -120,6 +123,9 @@ while [[ $# -gt 0 ]]; do
     --ref-docs)  REF_DOCS="$2"; shift 2 ;;
     --profile)   CRED_PROFILE="$2"; shift 2 ;;
     --no-interactive) NO_INTERACTIVE="1"; shift ;;
+    --compose-rules) COMPOSE_RULES="1"; shift ;;
+    --auto-complete) AUTO_COMPLETE="1"; shift ;;
+    --baseline)      BASELINE="1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -572,5 +578,8 @@ else
     --run-id "$RUN_ID" \
     --mode "$MODE" \
     --user-prompt "$USER_PROMPT" \
+    ${COMPOSE_RULES:+--compose-rules true} \
+    ${AUTO_COMPLETE:+--auto-complete true} \
+    ${BASELINE:+--baseline true} \
     ${PROVIDER:+--provider "$PROVIDER"}
 fi

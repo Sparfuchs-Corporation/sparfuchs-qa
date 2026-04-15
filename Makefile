@@ -30,7 +30,10 @@ qa-review:
 		$(if $(URL),--url "$(URL)") \
 		$(if $(ENGINE),--engine "$(ENGINE)") \
 		$(if $(PROVIDER),--provider "$(PROVIDER)") \
-		$(if $(REF_DOCS),--ref-docs "$(REF_DOCS)")
+		$(if $(REF_DOCS),--ref-docs "$(REF_DOCS)") \
+		$(if $(COMPOSE_RULES),--compose-rules) \
+		$(if $(AUTO_COMPLETE),--auto-complete) \
+		$(if $(BASELINE),--baseline)
 qa-ref-verify:
 	@bash scripts/qa-review-remote.sh \
 		--repo "$(REPO)" --full \

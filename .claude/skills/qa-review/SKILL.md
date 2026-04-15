@@ -17,17 +17,17 @@ Comprehensive QA review that discovers a project, assesses risk, delegates to sp
 **CRITICAL RULES**:
 - Do NOT create files in `qa-reports/` beyond the ones specified below. The session log directory and its per-agent files are part of the specified output.
 - File names MUST use today's calendar date (the date the review is run), NOT commit dates, analysis timestamps, or git log dates.
-- **Session log = directory of per-agent files.** Instead of one monolithic file, create `{output-dir}/{YYYY-MM-DD}_{project-name}_session-log/`. The orchestrator writes `_index.md` (header, discovery, scope, agent status table). Each agent writes its own file with its complete unedited output using the Write tool. **The orchestrator NEVER transcribes or summarizes agent output** — agents write their own files directly. Reviewers browse the directory offline. If `--summary` flag is passed, fall back to the old single-file session log with agent summaries.
+- **Session log = directory of per-agent files.** Instead of one monolithic file, create `{output-dir}/{YYYY-MM-DD}_{project-name}_session-log/`. Each agent writes its own file with its complete unedited output using the Write tool. **The orchestrator NEVER transcribes or summarizes agent output** — agents write their own files directly. Reviewers browse the directory offline. Aggregation data (agent status, validation, coverage) lives in `meta.json`, not in a separate index file. If `--summary` flag is passed, fall back to the old single-file session log with agent summaries.
 - **Report = full findings, generated from findings.jsonl.** Every individual finding listed with file:line, description, and fix. The Findings sections are GENERATED from the findings.jsonl file, not written from memory. One finding per file:line pair — if a pattern repeats in 11 files, the report shows 11 numbered findings. Never batch or summarize (e.g., "11-15. Minor issues" is forbidden; "useSetup.ts + 10 more hooks" is forbidden — list each one).
 - You produce 5 core output files (always), plus optional files when `--training` or `--docs` flags are present:
   1. `{YYYY-MM-DD}_{project-name}_session-log/` — session log **directory** containing:
-     - `_index.md` — run metadata, discovery, scope, agent status table, closing summary
      - `{HH-MM-SS}_{agent-name}.md` — one file per agent with complete output, named by local launch time (e.g., `04-21-33_build-verifier.md`, `04-33-12_security-reviewer.md`). Filesystem sort = execution order.
   2. `{YYYY-MM-DD}_{project-name}_qa-report.md` — all findings
   3. `{YYYY-MM-DD}_{project-name}_spec-report.md` — functional spec verification (from @spec-verifier)
   4. `{YYYY-MM-DD}_{project-name}_qa-gaps.md` — QA coverage gap analysis (from @qa-gap-analyzer)
   5. `{YYYY-MM-DD}_{project-name}_remediation-plan.md` — prioritized, phased action plan for fixing findings
-  6. `{YYYY-MM-DD}_{project-name}_training-spec.md` — training content (when `--training`, OVERVIEW mode)
+  6. `{YYYY-MM-DD}_{project-name}_observability-gaps.md` — observability gap report (from @observability-auditor + @workflow-extractor)
+  7. `{YYYY-MM-DD}_{project-name}_training-spec.md` — training content (when `--training`, OVERVIEW mode)
   6a. `{YYYY-MM-DD}_{project-name}_training-deep-{module}.md` — training deep-dive (when `--training` + `Module: X`)
   6b. `{YYYY-MM-DD}_{project-name}_training-journey-{slug}.md` — training journey (when `--training` + `Journey: X`)
   7. `{YYYY-MM-DD}_{project-name}_architecture.md` — architecture documentation (when `--docs`)
@@ -103,38 +103,9 @@ Create the session log directory and write the index file and report header imme
 mkdir -p {output-dir}/{YYYY-MM-DD}_{project-name}_session-log
 ```
 
-**File 1 — Session Log Index** (`_index.md` inside the directory): Write using the Write tool:
-
-```markdown
-# QA Session Log — {Project Name}
-
-**Run ID**: {run-id}
-**Date**: {YYYY-MM-DD HH:MM}
-**Person**: {person name}
-**Repo**: {repo path}
-**URL**: {web url}
-**Output Dir**: {output dir}
-
----
-
-## Intake Complete
-- Project: {project name}
-- Repo: {repo path}
-- URL: {web url}
-- Initiated by: {person name}
-- Output directory: {output dir}
-- Run ID: {run-id}
-
-## Agent Status
-
-| # | Agent | Launch Time | Findings | Status | Output File |
-|---|---|---|---|---|---|
-| | _(populated as agents complete)_ | | | | |
-```
-
 Note: If `--summary` flag was passed, create a single session log file instead of a directory (old behavior).
 
-**File 2 — QA Report**: Write the header block using the Write tool:
+**File 1 — QA Report**: Write the header block using the Write tool:
 
 ```markdown
 # QA Report — {Project Name}
@@ -432,8 +403,7 @@ For each:
    **Why Write instead of Bash**: Bash heredocs can be blocked by safety hooks (seen in practice). The Write tool is always available to agents and handles large content without shell escaping issues.
 3. **Run the agent** (in background for parallel stages)
 4. **On completion, verify output file exists** via Glob. If MISSING, write whatever the agent returned (even if summarized from notification) to the output file as a fallback.
-5. **Update `_index.md` agent status table** with: agent name, launch time, finding count, status (complete/failed/missing-output), duration.
-6. **Stream findings to JSONL (MANDATORY — report generation depends on this)**:
+5. **Stream findings to JSONL (MANDATORY — report generation depends on this)**:
    a. After the agent completes and its output file exists, use Grep to extract ALL `<!-- finding: {...} -->` tags from the output file (not from memory).
    b. Validate each tag has required fields: `severity`, `category`, `file`, `title`, `fix`. If `line` is missing, set to 0.
    c. Add `agent` field (agent name) and `runId` field if not present.
@@ -458,7 +428,7 @@ For each:
    - Re-run the agent with ONLY the missed files as a follow-up chunk
    - Merge follow-up findings with original findings
    - Repeat until 98% reached or 3 retries exhausted
-4. Log final coverage per agent to session log under `## File Coverage Matrix`
+4. Include final coverage per agent in `meta.json` under `fileCoverage` key (written in Step 6.25)
 
 ### Generator Agents (produce executable scripts)
 
@@ -477,8 +447,7 @@ For each:
    - If external tool not installed (k6, etc.): log `"Script generated but not executed — {tool} not installed"`
    - If executed: capture full stdout/stderr
 6. Verify the agent output file exists. If MISSING, write whatever was returned to the file as fallback.
-7. Update `_index.md` agent status table.
-8. Collect findings from execution results for the report
+7. Collect findings from execution results for the report
 
 ### Agent Routing Table
 
@@ -548,7 +517,7 @@ After all domain agents complete (Step 5), run `@spec-verifier`:
 1. Delegate to `@spec-verifier` with the target repo path, the run ID, today's date, and the output file path: `{output-dir}/{YYYY-MM-DD}_{project-slug}_spec-report.md`
 2. The agent searches for PRD/spec documents. If found: Mode A (verify). If not: Mode B (reverse-engineer).
 3. It writes the spec report directly to the output file
-4. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_spec-verifier.md` (include path in delegation prompt). Update `_index.md` agent status table.
+4. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_spec-verifier.md` (include path in delegation prompt).
 
 ## Step 5.7: Training & Documentation Generation (optional)
 
@@ -588,7 +557,7 @@ Skip this step entirely if neither `--training` nor `--docs` flags are present.
    Previous training specs (if any): {output-dir}/*_training-*.md
    ```
 
-4. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_training-system-builder.md`. Update `_index.md` agent status table.
+4. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_training-system-builder.md`.
 
 ### Architecture Documentation (`--docs` flag)
 
@@ -609,7 +578,7 @@ Skip this step entirely if neither `--training` nor `--docs` flags are present.
    Write output to: {output-dir}/{YYYY-MM-DD}_{project-slug}_architecture.md
    ```
 
-2. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_architecture-doc-builder.md`. Update `_index.md` agent status table.
+2. The agent writes its output to `{session-log-dir}/{HH-MM-SS}_architecture-doc-builder.md`.
 
 ## Step 6: Write Final Report
 
@@ -832,7 +801,7 @@ After writing the report, verify completeness and format:
    - `Multiple ` or `Various ` at start of a finding description — indicates vague findings
    - Lines matching the finding format that lack backtick-wrapped `file:line` — indicates missing location
    For each anti-pattern found, log a warning and fix it inline.
-5. **Log validation result** to `_index.md` in the session log directory under `## Report Validation`.
+5. **Log validation result** — include in `meta.json` under `reportValidation` key (written in Step 6.25).
 
 ## Step 6.25: Build Findings Index & Delta
 
@@ -856,35 +825,6 @@ After writing the report, process the streamed findings for cross-run tracking:
 7. **Log delta to session log**: Append a `## Remediation Delta` section with new/recurring/remediated counts and closure rate
 
 If this is the first run (no baseline), skip steps 3-4 and just write the baseline and metadata.
-
-## Step 7: Finalize Session Log
-
-Append a closing section to `_index.md` in the session log directory using Edit:
-
-```markdown
----
-
-## Session Complete
-
-- **Agents run**: {n} (see agent status table above, each with its own .md file in this directory)
-- **Total findings**: {n} ({n} deployed, {n} MFE-pending)
-- **File coverage**: {pct}% (target: 98%)
-- **Verdict**: {PASS/NEEDS CHANGES/BLOCKED}
-- **Report written to**: {report file path}
-- **Spec report**: {spec report file path}
-- **Session log directory**: {session log directory path}
-- **Per-agent files**: {n} files (browse directory for complete agent output)
-- **Report validation**: {PASS/FAIL} (see ## Report Validation above)
-- **Duration**: {elapsed time}
-- **Completed**: {ISO timestamp}
-
-{If not --full:}
-- **Coverage note**: {n} of 37 agents ran (Stages {stages}). Skipped: {comma-separated category names}.
-  Run `--tier2` for integrity checks or `--full` for complete coverage including test execution.
-
-{If deployment scope was detected:}
-- **Deployment scope**: {n} findings in deployed code, {n} in MFE-pending code
-```
 
 ## Step 7.5: Generate Remediation Plan
 
@@ -944,6 +884,29 @@ Features that are partially implemented or stubbed. Real work needed, not just w
 
 Security, performance, accessibility, infrastructure findings. Only worth tackling after Phases 1-3.
 
+## Phase 4.5: Observability & Instrumentation
+
+Gaps in logging, metrics, audit trails, and security event coverage identified by `@observability-auditor` (12-dimension audit). Organized by remediation tier.
+
+### 4.5.1 Tier 1 — Security Observability (SIEM/Syslog feed)
+{Auth audit logging, rate limit events, security event instrumentation — gaps from dimensions 7, 9}
+- **What's missing**: {specific gaps}
+- **Why it matters**: {incident response, threat detection, compliance}
+- **Files to modify**: {paths}
+- **Approach**: {concrete steps}
+
+### 4.5.2 Tier 2 — Operational Observability
+{Structured logging, error context, tracing, log enrichment, tiered logging — gaps from dimensions 1-4, 8, 10}
+- **What's missing**: {specific gaps}
+- **Files to modify**: {paths}
+- **Approach**: {concrete steps}
+
+### 4.5.3 Tier 3 — Business & Compliance Observability
+{Business metrics, funnel tracking, compliance event trail — gaps from dimensions 5-6, 11-12}
+- **What's missing**: {specific gaps}
+- **Files to modify**: {paths}
+- **Approach**: {concrete steps}
+
 ## Phase 5: Polish (nice-to-haves)
 
 Low-severity findings, documentation gaps, code style.
@@ -966,27 +929,109 @@ Phase 1.1 ──► Phase 2.3 (settings persistence)
 
 {Omit empty phases. Every finding from the qa-report must appear in exactly one phase.}
 
+## Step 7.6: Generate Observability Gap Report
+
+After the remediation plan, generate File 6: `{output-dir}/{YYYY-MM-DD}_{project-slug}_observability-gaps.md`
+
+This consolidates `@observability-auditor` (12-dimension coverage matrix) and `@workflow-extractor` (step-by-step observability cross-reference) into a standalone gap report.
+
+### How to generate
+
+1. Read the `@observability-auditor` session output from `{session-log-dir}/{HH-MM-SS}_observability-auditor.md`
+2. Read the `@workflow-extractor` session output from `{session-log-dir}/{HH-MM-SS}_workflow-extractor.md`
+3. If either agent did not run, generate a partial report from whichever is available
+4. Consolidate into the format below
+
+### Observability gap report format
+
+```markdown
+# Observability Gap Report — {Project Name}
+
+**Generated**: {date} | **Run ID**: {run-id}
+
+## Executive Summary
+
+{2-3 sentences: overall observability posture, most critical gaps, % of workflow steps with full coverage}
+
+## Workflow Observability Map
+
+{For each workflow discovered by @workflow-extractor, show the step-by-step view with observability status}
+
+### Workflow: "{name}"
+
+| Step | Phase | Description | Code Location | Status | Logging | Metrics | Audit Trail | Observable? |
+|---|---|---|---|---|---|---|---|---|
+| 1 | ENTRY | Widget loads | widget.js:loadWidget() | VERIFIED | NO | NO | NO | NO |
+| 2 | SUBMIT | Message sent | POST /api/chat | VERIFIED | PARTIAL | NO | NO | PARTIAL |
+
+**Gap impact**: {which steps are blind spots for debugging, security, analytics}
+
+## Coverage Matrix (All 12 Dimensions)
+
+{Copy from @observability-auditor output — both Tier A and Tier B matrices}
+
+## Tiered Remediation Recommendations
+
+### Tier 1 — Immediate (Security & Incident Response)
+{Audit event logging gaps, rate limit silencing, swallowed errors — these block incident investigation}
+
+- [ ] Add auth success/failure logging to {handlers}
+- [ ] Add rate limit event logging to {middleware}
+- [ ] Configure separate audit log stream
+
+### Tier 2 — Standard (Operational Visibility)
+{Structured logging, error context, tracing, log enrichment — these enable day-to-day debugging}
+
+- [ ] Replace console.log with structured logger in {files}
+- [ ] Add request context propagation via AsyncLocalStorage
+- [ ] Configure log level via LOG_LEVEL environment variable
+
+### Tier 3 — Advanced (Business Intelligence & Compliance)
+{Business metrics, funnel tracking, compliance event trail — these enable analytics and audit readiness}
+
+- [ ] Add per-step counters for {workflows}
+- [ ] Implement data lifecycle logging for {collections/tables}
+- [ ] Add consent change tracking
+
+## Gaps by Impact
+
+### Increases Bug Identification Time
+{Gaps that make bugs harder to find — swallowed errors, missing logging, no correlation IDs}
+
+### Reduces User Support Capability
+{Gaps that prevent tracing a user's journey — no requestId propagation, no session tracking}
+
+### Blocks Compliance Audit
+{Gaps an auditor would flag — missing data access logging, no consent trail, no retention logging}
+
+### Prevents Threat Detection
+{Gaps that reduce SIEM effectiveness — silent rate limiting, no auth failure counting, no security event stream}
+
+### Hides Business Performance
+{Gaps that prevent measuring workflow effectiveness — no step metrics, no funnel tracking}
+```
+
 ## Step 7.75: Run QA Gap Analyzer
 
-After the session log is finalized, run `@qa-gap-analyzer` as the very last step:
+Run `@qa-gap-analyzer` as the final analysis step:
 
-1. Delegate to `@qa-gap-analyzer` with paths to the session log, QA report, spec report, and the target repo path
-2. The agent reads all three files, independently explores the repo, and produces `{output-dir}/{YYYY-MM-DD}_{project-slug}_qa-gaps.md`
-3. Append the gap analyzer's full verbatim output to the session log under `### QA Gap Analyzer — {timestamp}`
+1. Delegate to `@qa-gap-analyzer` with paths to the QA report, spec report, observability gaps report, and the target repo path
+2. The agent reads all files, independently explores the repo, and produces `{output-dir}/{YYYY-MM-DD}_{project-slug}_qa-gaps.md`
 
 ## Step 8: Present Results
 
-Present all five file paths and the delta summary to the user:
+Present all file paths and the delta summary to the user:
 
 ```
 QA review complete.
 
-Session log:        {session-log path}
-QA report:          {report path}
-Spec report:        {spec-report path}
-Gap analysis:       {qa-gaps path}
-Remediation plan:   {remediation-plan path}
-Findings data:      qa-data/{project-slug}/runs/{run-id}/
+QA report:            {report path}
+Spec report:          {spec-report path}
+Remediation plan:     {remediation-plan path}
+Observability gaps:   {observability-gaps path}
+Gap analysis:         {qa-gaps path}
+Session log dir:      {session-log directory path}
+Findings data:        qa-data/{project-slug}/runs/{run-id}/
 
 {If delta exists:}
 Compared to last run ({previous-run-id}):

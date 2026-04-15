@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import * as readline from 'node:readline';
 import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
 import { isApiProvider } from './types.js';
@@ -15,6 +15,8 @@ import {
   registerAdapter, resolveCliProviders, printCapabilityReport, getAdapter,
 } from './adapters/index.js';
 import { estimateTokenCost, printBudgetPrompt, checkBudget, updateBudgetUsage, isAgentInBudget } from './token-budget.js';
+import { loadRulesCache, composeAgentPrompt } from './prompt-composer.js';
+import { deduplicateFindings } from './finding-deduplicator.js';
 import type { TokenBudget } from './types.js';
 import { ApiAdapter } from './adapters/api-adapter.js';
 import { ClaudeCliAdapter } from './adapters/claude-cli-adapter.js';
@@ -29,6 +31,7 @@ function initAdapters(): void {
   registerAdapter(new ApiAdapter('xai'));
   registerAdapter(new ApiAdapter('google'));
   registerAdapter(new ApiAdapter('anthropic'));
+  registerAdapter(new ApiAdapter('openai'));
 
   // CLI adapters
   registerAdapter(new ClaudeCliAdapter());
@@ -97,6 +100,14 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   writeTestabilityReport(testabilityReport, runDir);
   printTestabilitySummary(testabilityReport);
 
+  // 5.6. Load rules cache for prompt composition (only when COMPOSE_RULES is enabled)
+  const rulesDir = join(config.sparfuchsRoot, 'rules');
+  const rulesCache = config.composeRules ? loadRulesCache(rulesDir) : new Map<string, string>();
+
+  if (config.composeRules) {
+    process.stderr.write(`\nPrompt composition: ON (${rulesCache.size} rules loaded)\n`);
+  }
+
   const agentsToSkip = new Set(
     testabilityReport.agentPredictions
       .filter(p => !p.effective)
@@ -143,6 +154,24 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     }
   }
 
+  // 7.5. Baseline mode — resolve previous findings
+  if (config.baseline) {
+    const previousRunDir = findLatestRun(
+      join(config.qaDataRoot, config.projectSlug, 'runs'),
+      config.runId,
+    );
+    if (previousRunDir) {
+      const prevFindingsPath = join(previousRunDir, 'findings.jsonl');
+      if (existsSync(prevFindingsPath)) {
+        config.previousFindingsPath = prevFindingsPath;
+        process.stderr.write(`Baseline: comparing against ${previousRunDir}\n`);
+      }
+    }
+    if (!config.previousFindingsPath) {
+      process.stderr.write('Baseline: no previous run found, running full scan\n');
+    }
+  }
+
   // 8. Print run header
   const apiAvail = available.filter(p => isApiProvider(config.modelsConfig.providers[p]));
   const cliAvail = available.filter(p => !isApiProvider(config.modelsConfig.providers[p]));
@@ -159,6 +188,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   }
   process.stderr.write(`Agents: ${agents.length} | Mode: ${config.mode} | Repo: ${config.repoPath}\n`);
   process.stderr.write(`Classification: ${modelsConfig.dataClassification} | Redact secrets: ${modelsConfig.redactSecrets}\n`);
+  process.stderr.write(`Compose: ${config.composeRules ? 'ON' : 'OFF'} | Auto-complete: ${config.autoComplete ? 'ON' : 'OFF'} | Baseline: ${config.baseline ? 'ON' : 'OFF'}\n`);
   if (config.moduleScope) {
     process.stderr.write(`Module scope: ${config.moduleScope}\n`);
   }
@@ -204,7 +234,12 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       observer.startAgent(agentLabel);
 
       try {
-        let delegationPrompt = buildDelegationPrompt(agent, config);
+        // Compose agent prompt when COMPOSE_RULES is enabled
+        const agentToRun = config.composeRules && rulesCache.size > 0
+          ? { ...agent, systemPrompt: composeAgentPrompt(agent.systemPrompt, rulesCache, resolved.model) }
+          : agent;
+
+        let delegationPrompt = buildDelegationPrompt(agentToRun, config);
 
         if (chunk && chunkPlan) {
           delegationPrompt += buildChunkPromptSuffix(chunk, chunkPlan.chunks.length, config.repoPath);
@@ -217,7 +252,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         }
 
         const result = await runAgent(
-          agent, delegationPrompt, config, status,
+          agentToRun, delegationPrompt, config, status,
           (s) => observer.updateAgent(agentLabel, s),
           (e) => observer.recordFallback(e),
         );
@@ -270,6 +305,15 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     }
   }
 
+  // 8.5. Post-run finding deduplication
+  const dedupResult = deduplicateFindings(findingsPath, runDir);
+  if (dedupResult.removed > 0) {
+    process.stderr.write(
+      `\nDedup: ${dedupResult.original} -> ${dedupResult.deduplicated} findings ` +
+      `(${dedupResult.removed} cross-agent duplicates merged)\n`,
+    );
+  }
+
   // 9. Write quality audit results
   const auditPath = join(runDir, 'quality-audit.json');
   auditor.writeResults(auditPath);
@@ -311,7 +355,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
 function buildDelegationPrompt(agent: AgentDefinition, config: OrchestrationConfig): string {
   const outputPath = join(config.sessionLogDir, `${formatTime()}_${agent.name}.md`);
-  return (
+  let prompt =
     `${config.userPrompt}\n\n` +
     `IMPORTANT — Write your complete output to a file.\n` +
     `At the END of your analysis, use the Write tool to write your ENTIRE response to:\n` +
@@ -320,8 +364,21 @@ function buildDelegationPrompt(agent: AgentDefinition, config: OrchestrationConf
     `every finding with evidence, every clean check. This IS the forensic record.\n\n` +
     `Target repo: ${config.repoPath}\n` +
     `Run ID: ${config.runId}\n` +
-    `Project: ${config.projectSlug}`
-  );
+    `Project: ${config.projectSlug}`;
+
+  // Baseline mode: inject previous findings for comparison
+  if (config.previousFindingsPath && existsSync(config.previousFindingsPath)) {
+    const previousContent = readFileSync(config.previousFindingsPath, 'utf8');
+    const truncated = previousContent.split('\n').slice(-200).join('\n');
+    prompt +=
+      `\n\nBASELINE MODE — Previous findings from the last run are provided below.\n` +
+      `Only report NEW or WORSENED findings compared to this baseline.\n` +
+      `Do not re-report findings that appear below unless the fix introduced a new issue.\n` +
+      `If a previous finding is now fixed, you may note it as "resolved" but do not count it.\n\n` +
+      `Previous findings:\n${truncated}\n`;
+  }
+
+  return prompt;
 }
 
 async function showConsentPrompt(providers: ProviderName[], repoPath: string): Promise<void> {
@@ -375,6 +432,31 @@ const REFDOC_AWARE_AGENTS = new Set([
   'deploy-readiness-reviewer',
   'rbac-reviewer',
   'workflow-extractor',
+]);
+
+function findLatestRun(runsDir: string, currentRunId: string): string | null {
+  if (!existsSync(runsDir)) return null;
+  try {
+    const entries = readdirSync(runsDir, { withFileTypes: true })
+      .filter(e => e.isDirectory() && e.name !== currentRunId)
+      .map(e => e.name)
+      .sort()
+      .reverse();
+    return entries.length > 0 ? join(runsDir, entries[0]) : null;
+  } catch {
+    return null;
+  }
+}
+
+// Agents that produce verbose output — should not run on providers with low output caps (e.g. Llama 16K)
+const VERBOSE_AGENTS = new Set([
+  'observability-auditor',
+  'workflow-extractor',
+  'ref-doc-verifier',
+  'training-system-builder',
+  'architecture-doc-builder',
+  'qa-gap-analyzer',
+  'release-gate-synthesizer',
 ]);
 
 function buildRefDocPromptSuffix(claimsManifestPath: string): string {
