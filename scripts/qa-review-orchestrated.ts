@@ -36,6 +36,9 @@ async function main(): Promise<void> {
   const mode = (args['mode'] ?? 'full') as OrchestrationConfig['mode'];
   const provider = args['provider'] as ProviderName | undefined;
   const userPrompt = args['user-prompt'] ?? `Run a QA review for this repository.`;
+  const selectedAgents = args['selected-agents']
+    ? args['selected-agents'].split(',').map(s => s.trim()).filter(Boolean)
+    : undefined;
   const composeRules = args['compose-rules'] === 'true' || process.env.COMPOSE_RULES === 'true';
   const autoComplete = args['auto-complete'] === 'true' || process.env.QA_AUTO_COMPLETE === 'true';
   const baseline = args['baseline'] === 'true' || process.env.QA_BASELINE === 'true';
@@ -57,6 +60,7 @@ async function main(): Promise<void> {
     providerOverride: provider,
     modelsConfig: undefined as never, // loaded by runOrchestration
     userPrompt,
+    selectedAgents,
     composeRules,
     autoComplete,
     baseline,

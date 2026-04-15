@@ -4,7 +4,7 @@ import * as readline from 'node:readline';
 import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
 import { isApiProvider } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
-import { parsePhase1Agents, validateAgentIntegrity } from './agent-parser.js';
+import { parseAgentsByNames, parsePhase1Agents, validateAgentIntegrity } from './agent-parser.js';
 import { runAgent } from './agent-runner.js';
 import { ObservabilityTracker } from './observability.js';
 import { QualityAuditor } from './quality-auditor.js';
@@ -76,7 +76,9 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
   // 4. Parse agents and validate integrity
   const agentsDir = join(config.repoPath, '.claude', 'agents');
-  const agents = parsePhase1Agents(agentsDir, modelsConfig.agentOverrides);
+  const agents = config.selectedAgents?.length
+    ? parseAgentsByNames(agentsDir, config.selectedAgents, modelsConfig.agentOverrides)
+    : parsePhase1Agents(agentsDir, modelsConfig.agentOverrides);
   const hashesPath = join(config.sparfuchsRoot, 'config', 'agent-hashes.json');
   const integrity = validateAgentIntegrity(agents, hashesPath);
   if (!integrity.valid) {

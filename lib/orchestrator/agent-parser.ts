@@ -96,6 +96,16 @@ export function parsePhase1Agents(
   );
 }
 
+export function parseAgentsByNames(
+  agentsDir: string,
+  agentNames: string[],
+  overrides: Record<string, AgentOverride>,
+): AgentDefinition[] {
+  return agentNames.map(name =>
+    parseAgentFile(join(agentsDir, `${name}.md`), overrides),
+  );
+}
+
 export function validateAgentIntegrity(
   agents: AgentDefinition[],
   hashesPath: string,
