@@ -33,9 +33,11 @@ function isServerError(err: unknown): boolean {
 const AUTH_FAIL_THRESHOLD = 3;
 const authFailCounts = new Map<ProviderName, number>();
 
-// Retry config for transient failures (rate limits, server errors)
-const MAX_RETRIES_PER_PROVIDER = 2;
-const RETRY_BASE_MS = 3_000;
+// Retry config for transient failures
+// Rate limits are per-minute, so backoff must be long enough for the window to reset.
+const MAX_RETRIES_PER_PROVIDER = 3;
+const RATE_LIMIT_RETRY_MS = 30_000; // 30s base for 429s (per-minute limit needs 30-60s)
+const SERVER_ERROR_RETRY_MS = 5_000; // 5s base for 5xx (transient, shorter backoff)
 
 // --- Runner ---
 
@@ -87,10 +89,14 @@ export async function runAgent(
       } catch (err: unknown) {
         lastError = err instanceof Error ? err : new Error(String(err));
 
-        const isRetryable = isRateLimitError(err) || isServerError(err);
+        const isRateLimit = isRateLimitError(err);
+        const isServer = isServerError(err);
 
-        if (isRetryable && attempt < MAX_RETRIES_PER_PROVIDER) {
-          const delay = RETRY_BASE_MS * Math.pow(2, attempt); // 3s, 6s
+        if ((isRateLimit || isServer) && attempt < MAX_RETRIES_PER_PROVIDER) {
+          // Rate limits need long backoff (per-minute window): 30s, 60s, 120s
+          // Server errors need shorter backoff: 5s, 10s, 20s
+          const baseMs = isRateLimit ? RATE_LIMIT_RETRY_MS : SERVER_ERROR_RETRY_MS;
+          const delay = baseMs * Math.pow(2, attempt);
           await new Promise(r => setTimeout(r, delay));
           continue; // retry same provider
         }

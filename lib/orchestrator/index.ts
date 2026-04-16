@@ -385,7 +385,12 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   let budgetExceeded = false;
 
   // Concurrency limiter
-  const concurrency = config.concurrency ?? 8;
+  // Default concurrency based on number of API providers available.
+  // Anthropic rate limits are per-minute (50k tokens/min on lower tiers),
+  // so running 8 agents simultaneously overwhelms a single API key.
+  const apiProviderCount = registry.getAvailableProviders().length;
+  const defaultConcurrency = apiProviderCount <= 1 ? 3 : 8;
+  const concurrency = config.concurrency ?? defaultConcurrency;
   function createLimiter(max: number) {
     let active = 0;
     const queue: Array<() => void> = [];
