@@ -5,7 +5,7 @@ import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, Fil
 import { isApiProvider } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
 import { parseAgentsByNames, parsePhase1Agents, parseAllAgents, validateAgentIntegrity } from './agent-parser.js';
-import { runAgent } from './agent-runner.js';
+import { runAgent, interruptibleSleep } from './agent-runner.js';
 import { RunState } from './run-state.js';
 import { TtyRenderer } from './renderers/tty-renderer.js';
 import { DashboardController } from './dashboard-controller.js';
@@ -20,7 +20,8 @@ import { estimateTokenCost, printBudgetPrompt, checkBudget, updateBudgetUsage, i
 import { loadRulesCache, composeAgentPrompt } from './prompt-composer.js';
 import { deduplicateFindings } from './finding-deduplicator.js';
 import { CoverageBabysitter, getStrategyConfig, capToolCallLog } from './coverage-babysitter.js';
-import type { TokenBudget, CoverageStrategy } from './types.js';
+import type { TokenBudget, CoverageStrategy, ObservabilityLevel } from './types.js';
+import { OBS_RANK } from './types.js';
 import { ApiAdapter } from './adapters/api-adapter.js';
 import { ClaudeCliAdapter } from './adapters/claude-cli-adapter.js';
 import { GeminiCliAdapter } from './adapters/gemini-cli-adapter.js';
@@ -187,6 +188,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
   // 6. Large codebase chunking + coverage strategy
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
+  config.sourceFiles = new Set(allSourceFiles);
   const strategy: CoverageStrategy = config.coverageStrategy
     ?? modelsConfig.coverageStrategy
     ?? 'balanced';
@@ -194,33 +196,25 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const strategyConfig = getStrategyConfig(strategy);
   const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig);
 
-  // 6.1. API-only enforcement for babysitting
+  // 6.1. Observability-level check for babysitting
+  // Find the best observability level across all available providers.
   let babysittingEnabled = true;
-  if (strategyConfig.requireApiProvider) {
-    const hasApiProvider = available.some(p => {
-      const cfg = modelsConfig.providers[p];
-      return cfg && isApiProvider(cfg);
-    });
-    if (!hasApiProvider) {
-      process.stderr.write(
-        '\nWARNING: Coverage babysitting requires API providers for tool call observability.\n' +
-        'No API provider available — running in degraded mode (no retry, no scope hints).\n' +
-        `Consider using --coverage sweep for CLI-only setups.\n\n`,
-      );
-      babysittingEnabled = false;
-
-      // One-time persisted notice
-      const noticeDir = join(process.env.HOME ?? '/tmp', '.sparfuchs-qa');
-      const noticePath = join(noticeDir, 'coverage-notice.json');
-      if (!existsSync(noticePath)) {
-        mkdirSync(noticeDir, { recursive: true });
-        writeFileSync(noticePath, JSON.stringify({
-          notice: 'CLI-only setup detected. Coverage babysitting requires API providers.',
-          recommendation: 'Use --coverage sweep for CLI-only environments.',
-          timestamp: new Date().toISOString(),
-        }, null, 2));
-      }
+  let bestObsLevel: ObservabilityLevel = 'none';
+  for (const p of available) {
+    const adapter = getAdapter(p);
+    const level = adapter.getCapabilities().observabilityLevel;
+    if (OBS_RANK[level] > OBS_RANK[bestObsLevel]) {
+      bestObsLevel = level;
     }
+  }
+
+  if (OBS_RANK[bestObsLevel] < OBS_RANK[strategyConfig.minimumObservability]) {
+    process.stderr.write(
+      `\nNOTICE: Coverage strategy "${strategy}" recommends ${strategyConfig.minimumObservability} observability,\n` +
+      `but best available provider offers ${bestObsLevel}.\n` +
+      `Babysitting will run at reduced fidelity (retries and scope hints may be limited).\n\n`,
+    );
+    // Still enable babysitting — partial data is better than none
   }
 
   // 6.5. Capability report for the selected provider when overridden,
@@ -384,13 +378,35 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   });
   let budgetExceeded = false;
 
-  // Concurrency limiter
-  // Default concurrency based on number of API providers available.
-  // Anthropic rate limits are per-minute (50k tokens/min on lower tiers),
-  // so running 8 agents simultaneously overwhelms a single API key.
+  // Concurrency limiter — smart defaults based on provider mix
   const apiProviderCount = registry.getAvailableProviders().length;
-  const defaultConcurrency = apiProviderCount <= 1 ? 3 : 8;
+  const cliProviderCount = available.filter(p => !isApiProvider(modelsConfig.providers[p])).length;
+  const isAnthropicOnly = apiProviderCount === 1
+    && available.some(p => p === 'anthropic' && isApiProvider(modelsConfig.providers[p]));
+
+  let defaultConcurrency: number;
+  if (apiProviderCount === 0 && cliProviderCount > 0) {
+    // CLI-only: concurrent dispatch, no rate limits
+    defaultConcurrency = Math.max(cliProviderCount, 1);
+  } else if (isAnthropicOnly && cliProviderCount === 0) {
+    // Single Anthropic API key: sequential to stay within 50K tokens/min
+    defaultConcurrency = 1;
+  } else if (apiProviderCount <= 1) {
+    defaultConcurrency = 3;
+  } else {
+    // Multi-API or mixed: scale with provider count
+    defaultConcurrency = apiProviderCount + cliProviderCount;
+  }
   const concurrency = config.concurrency ?? defaultConcurrency;
+
+  // Inter-agent cooldown for rate-limit-sensitive setups
+  let cooldownMs = config.interAgentCooldownMs ?? 0;
+  if (cooldownMs === 0 && isAnthropicOnly && concurrency <= 2) {
+    cooldownMs = 30_000; // 30s auto-cooldown for Anthropic single-key sequential
+    process.stderr.write(
+      `Sequential mode: 30s inter-agent cooldown enabled for Anthropic rate limits.\n`,
+    );
+  }
   function createLimiter(max: number) {
     let active = 0;
     const queue: Array<() => void> = [];
@@ -531,6 +547,14 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       if (status.startedAt) {
         status.durationMs = Date.now() - new Date(status.startedAt).getTime();
       }
+    }
+
+    // Inter-agent cooldown — prevents rate limit hammering in sequential mode
+    if (cooldownMs > 0 && concurrency <= 2 && !dashboard.isQuitRequested()) {
+      status.error = status.error
+        ? `${status.error} | cooldown ${cooldownMs / 1000}s`
+        : null;
+      await interruptibleSleep(cooldownMs, abortController.signal);
     }
   }));
 

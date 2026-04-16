@@ -34,7 +34,7 @@ const AUTH_FAIL_THRESHOLD = 3;
 const authFailCounts = new Map<ProviderName, number>();
 
 /** Sleep that resolves early if the abort signal fires. */
-function interruptibleSleep(ms: number, signal?: AbortSignal): Promise<void> {
+export function interruptibleSleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise(resolve => {
     if (signal?.aborted) { resolve(); return; }
     const timer = setTimeout(resolve, ms);

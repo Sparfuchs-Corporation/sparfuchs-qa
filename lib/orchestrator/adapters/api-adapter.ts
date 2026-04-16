@@ -41,6 +41,7 @@ export class ApiAdapter implements AgentAdapter {
       agentDeployment: true,
       toolLogging: true,
       toolControl: true,
+      observabilityLevel: 'full',
     };
   }
 

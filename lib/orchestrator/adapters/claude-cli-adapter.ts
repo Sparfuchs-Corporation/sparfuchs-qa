@@ -9,6 +9,7 @@ import type {
   AgentCliCompatibility, DetectionResult, FallbackEvent,
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
+import { parseStreamJson } from './stream-json-parser.js';
 
 export class ClaudeCliAdapter implements AgentAdapter {
   readonly name = 'claude-cli' as const;
@@ -24,8 +25,9 @@ export class ClaudeCliAdapter implements AgentAdapter {
       systemPromptFile: true,
       addDir: true,
       agentDeployment: true,
-      toolLogging: false,  // CLI manages tools internally
+      toolLogging: true,
       toolControl: false,
+      observabilityLevel: 'structured',
     };
   }
 
@@ -54,6 +56,8 @@ export class ClaudeCliAdapter implements AgentAdapter {
 
     try {
       const args = [
+        '--print',
+        '--output-format', 'stream-json',
         '--append-system-prompt-file', systemPromptFile,
         '--add-dir', config.reportsDir ?? config.sessionLogDir,
         '--add-dir', config.qaDataRoot,
@@ -61,18 +65,24 @@ export class ClaudeCliAdapter implements AgentAdapter {
         delegationPrompt,
       ];
 
-      const text = await spawnCli(this.binary, args, config.repoPath);
+      const rawOutput = await spawnCli(this.binary, args, config.repoPath);
+      const parsed = parseStreamJson(rawOutput);
 
       status.durationMs = Date.now() - startTime;
 
+      // Fallback: if stream-json parsing yielded no text, use raw output
+      const text = parsed.text || rawOutput;
+
       return {
         text,
-        usage: { inputTokens: 0, outputTokens: 0 }, // CLI doesn't expose token counts
+        usage: parsed.usage.inputTokens > 0
+          ? parsed.usage
+          : { inputTokens: 0, outputTokens: 0 },
         steps: [],
-        toolCallLog: [], // CLI has no tool call observability
+        toolCallLog: parsed.toolCallLog,
         finishReason: 'stop',
         provider: this.name,
-        model: this.binary,
+        model: parsed.model ?? this.binary,
       };
     } finally {
       try { unlinkSync(systemPromptFile); } catch { /* already cleaned */ }

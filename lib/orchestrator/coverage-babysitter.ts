@@ -19,6 +19,7 @@ const STRATEGY_CONFIGS: Record<CoverageStrategy, CoverageStrategyConfig> = {
     retryBackoffMs: 0,
     unchunkedScopeHint: false,
     requireApiProvider: false,
+    minimumObservability: 'none',
   },
   balanced: {
     chunkSize: 45,
@@ -30,7 +31,8 @@ const STRATEGY_CONFIGS: Record<CoverageStrategy, CoverageStrategyConfig> = {
     maxRetriesPerChunk: 0,
     retryBackoffMs: 0,
     unchunkedScopeHint: true,
-    requireApiProvider: true,
+    requireApiProvider: false,
+    minimumObservability: 'heuristic',
   },
   thorough: {
     chunkSize: 25,
@@ -42,7 +44,8 @@ const STRATEGY_CONFIGS: Record<CoverageStrategy, CoverageStrategyConfig> = {
     maxRetriesPerChunk: 2,
     retryBackoffMs: 0,
     unchunkedScopeHint: true,
-    requireApiProvider: true,
+    requireApiProvider: false,
+    minimumObservability: 'structured',
   },
   exhaustive: {
     chunkSize: 18,
@@ -54,7 +57,8 @@ const STRATEGY_CONFIGS: Record<CoverageStrategy, CoverageStrategyConfig> = {
     maxRetriesPerChunk: 2,
     retryBackoffMs: 0,
     unchunkedScopeHint: true,
-    requireApiProvider: true,
+    requireApiProvider: false,
+    minimumObservability: 'structured',
   },
 };
 

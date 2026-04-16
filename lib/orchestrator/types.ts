@@ -9,6 +9,18 @@ export type ProviderName = ApiProviderName | CliProviderName;
 export type ProviderType = 'api' | 'cli';
 export type DataClassification = 'public' | 'internal' | 'restricted';
 
+// --- Observability Levels ---
+// Determines how much visibility the orchestrator has into agent tool usage.
+// Used by CoverageBabysitter to decide which strategies are viable.
+export type ObservabilityLevel = 'full' | 'structured' | 'heuristic' | 'none';
+
+export const OBS_RANK: Record<ObservabilityLevel, number> = {
+  none: 0,
+  heuristic: 1,
+  structured: 2,
+  full: 3,
+};
+
 export interface ApiProviderConfig {
   type: 'api';
   enabled: boolean;
@@ -48,6 +60,7 @@ export interface AdapterCapabilities {
   agentDeployment: boolean;
   toolLogging: boolean;
   toolControl: boolean;
+  observabilityLevel: ObservabilityLevel;
 }
 
 export interface AgentCliCompatibility {
@@ -219,6 +232,8 @@ export interface OrchestrationConfig {
   previousFindingsPath?: string;
   coverageStrategy?: CoverageStrategy;
   concurrency?: number;
+  interAgentCooldownMs?: number;
+  sourceFiles?: ReadonlySet<string>;
 }
 
 // --- Credential Store ---
@@ -284,7 +299,9 @@ export interface CoverageStrategyConfig {
   maxRetriesPerChunk: number;
   retryBackoffMs: number;
   unchunkedScopeHint: boolean;
+  /** @deprecated Use minimumObservability instead */
   requireApiProvider: boolean;
+  minimumObservability: ObservabilityLevel;
 }
 
 export interface CoverageEstimate {

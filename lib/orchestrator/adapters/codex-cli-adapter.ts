@@ -7,6 +7,7 @@ import type {
   AgentDefinition, AgentRunResult, AgentRunStatus,
   OrchestrationConfig, AdapterCapabilities,
   AgentCliCompatibility, DetectionResult, FallbackEvent,
+  ToolCallLogEntry,
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
 
@@ -26,6 +27,7 @@ export class CodexCliAdapter implements AgentAdapter {
       agentDeployment: false,
       toolLogging: true,
       toolControl: false,
+      observabilityLevel: 'structured',
     };
   }
 
@@ -87,7 +89,7 @@ export class CodexCliAdapter implements AgentAdapter {
         text,
         usage: execution.usage,
         steps: [],
-        toolCallLog: [],
+        toolCallLog: execution.toolCallLog,
         finishReason: 'stop',
         provider: this.name,
         model: this.binary,
@@ -107,12 +109,17 @@ function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
   );
 }
 
+interface CodexSpawnResult {
+  usage: { inputTokens: number; outputTokens: number };
+  toolCallLog: ToolCallLogEntry[];
+}
+
 function spawnCli(
   binary: string,
   args: string[],
   cwd: string,
   stdinInput: string,
-): Promise<{ usage: { inputTokens: number; outputTokens: number } }> {
+): Promise<CodexSpawnResult> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
@@ -122,6 +129,7 @@ function spawnCli(
 
     let stderr = '';
     let usage = { inputTokens: 0, outputTokens: 0 };
+    const toolCallLog: ToolCallLogEntry[] = [];
 
     proc.stdout.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -129,15 +137,46 @@ function spawnCli(
         const trimmed = line.trim();
         if (!trimmed) continue;
         try {
-          const event = JSON.parse(trimmed) as {
-            type?: string;
-            usage?: { input_tokens?: number; output_tokens?: number };
-          };
-          if (event.type === 'turn.completed' && event.usage) {
-            usage = {
-              inputTokens: event.usage.input_tokens ?? 0,
-              outputTokens: event.usage.output_tokens ?? 0,
-            };
+          const event = JSON.parse(trimmed) as Record<string, unknown>;
+
+          // Extract token usage from turn.completed events
+          if (event.type === 'turn.completed') {
+            const eventUsage = event.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            if (eventUsage) {
+              usage = {
+                inputTokens: eventUsage.input_tokens ?? 0,
+                outputTokens: eventUsage.output_tokens ?? 0,
+              };
+            }
+          }
+
+          // Extract tool calls from function_call / tool_use events
+          if (event.type === 'function_call' || event.type === 'tool_use') {
+            const name = (event.name ?? event.function ?? '') as string;
+            const input = (event.input ?? event.arguments ?? {}) as Record<string, unknown>;
+            if (name) {
+              toolCallLog.push({
+                tool: name,
+                args: typeof input === 'string' ? parseJsonSafe(input) : input,
+                timestamp: new Date().toISOString(),
+              });
+            }
+          }
+
+          // Also check for tool calls nested in message content
+          if (event.type === 'message' || event.type === 'response') {
+            const content = event.content as Array<{ type?: string; name?: string; input?: Record<string, unknown> }> | undefined;
+            if (Array.isArray(content)) {
+              for (const block of content) {
+                if (block.type === 'tool_use' && block.name) {
+                  toolCallLog.push({
+                    tool: block.name,
+                    args: block.input ?? {},
+                    timestamp: new Date().toISOString(),
+                  });
+                }
+              }
+            }
           }
         } catch {
           // Ignore non-JSON lines; Codex may emit informational text on stdout.
@@ -149,7 +188,7 @@ function spawnCli(
     });
 
     proc.on('close', (code) => {
-      if (code === 0) resolve({ usage });
+      if (code === 0) resolve({ usage, toolCallLog });
       else reject(new Error(`${binary} exited with code ${code}: ${stderr.slice(0, 500)}`));
     });
 
@@ -160,4 +199,12 @@ function spawnCli(
     proc.stdin.write(stdinInput);
     proc.stdin.end();
   });
+}
+
+function parseJsonSafe(str: string): Record<string, unknown> {
+  try {
+    return JSON.parse(str) as Record<string, unknown>;
+  } catch {
+    return { _raw: str };
+  }
 }

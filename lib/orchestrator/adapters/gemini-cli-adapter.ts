@@ -5,6 +5,7 @@ import type {
   AgentCliCompatibility, DetectionResult, FallbackEvent,
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
+import { parseStreamJson } from './stream-json-parser.js';
 
 // Agents that require --add-dir for qa-data or external references
 const ADDDIR_REQUIRED_AGENTS = new Set([
@@ -26,8 +27,9 @@ export class GeminiCliAdapter implements AgentAdapter {
       systemPromptFile: false,
       addDir: true,
       agentDeployment: false,
-      toolLogging: false,
+      toolLogging: true,
       toolControl: false,
+      observabilityLevel: 'structured',
     };
   }
 
@@ -72,22 +74,30 @@ export class GeminiCliAdapter implements AgentAdapter {
 
     const args = [
       '--sandbox',
-      '--add-dir', config.reportsDir ?? config.sessionLogDir,
-      '--add-dir', config.qaDataRoot,
-      combinedPrompt,
+      '--output-format', 'stream-json',
+      '--include-directories', config.reportsDir ?? config.sessionLogDir,
+      '--include-directories', config.qaDataRoot,
+      '--prompt', combinedPrompt,
     ];
-    const text = await spawnCli(this.binary, args, config.repoPath);
+
+    const rawOutput = await spawnCli(this.binary, args, config.repoPath);
+    const parsed = parseStreamJson(rawOutput);
 
     status.durationMs = Date.now() - startTime;
 
+    // Fallback: if stream-json parsing yielded no text, use raw output
+    const text = parsed.text || rawOutput;
+
     return {
       text,
-      usage: { inputTokens: 0, outputTokens: 0 },
+      usage: parsed.usage.inputTokens > 0
+        ? parsed.usage
+        : { inputTokens: 0, outputTokens: 0 },
       steps: [],
-      toolCallLog: [],
+      toolCallLog: parsed.toolCallLog,
       finishReason: 'stop',
       provider: this.name,
-      model: this.binary,
+      model: parsed.model ?? this.binary,
     };
   }
 }
