@@ -34,7 +34,8 @@ qa-review:
 		$(if $(REF_DOCS),--ref-docs "$(REF_DOCS)") \
 		$(if $(COMPOSE_RULES),--compose-rules) \
 		$(if $(AUTO_COMPLETE),--auto-complete) \
-		$(if $(BASELINE),--baseline)
+		$(if $(BASELINE),--baseline) \
+		$(if $(CONCURRENCY),--concurrency "$(CONCURRENCY)")
 qa-ref-verify:
 	@bash scripts/qa-review-remote.sh \
 		--repo "$(REPO)" --full \
@@ -84,7 +85,7 @@ qa-cache-reset:
 qa-setup:
 	npm install
 qa-keys-check:
-	@npx tsx -e "import{listStoredKeys}from'./lib/orchestrator/credential-store.js';const k=listStoredKeys();console.log(k.length?'Stored keys: '+k.join(', '):'No keys in OS keychain. Use: make qa-keys-setup')"
+	@npx tsx -e "import{listStoredKeys}from'./lib/orchestrator/credential-store.ts';const k=listStoredKeys();console.log(k.length?'Stored keys: '+k.join(', '):'No keys in OS keychain. Use: make qa-keys-setup')"
 qa-keys-setup:
 	@echo "Store API keys in your OS keychain (encrypted at rest):"
 	@echo ""
@@ -106,4 +107,4 @@ qa-creds-show:
 qa-creds-delete:
 	@npx tsx scripts/qa-creds-manage.ts delete --name "$(NAME)"
 qa-hashes-update:
-	@npx tsx -e "import{parsePhase1Agents,generateAgentHashes}from'./lib/orchestrator/agent-parser.js';import{writeFileSync}from'fs';const a=parsePhase1Agents('.claude/agents',{});writeFileSync('config/agent-hashes.json',JSON.stringify(generateAgentHashes(a),null,2));console.log('Updated config/agent-hashes.json')"
+	@npx tsx -e "import{parsePhase1Agents,generateAgentHashes}from'./lib/orchestrator/agent-parser.ts';import{writeFileSync}from'fs';const a=parsePhase1Agents('.claude/agents',{});writeFileSync('config/agent-hashes.json',JSON.stringify(generateAgentHashes(a),null,2));console.log('Updated config/agent-hashes.json')"

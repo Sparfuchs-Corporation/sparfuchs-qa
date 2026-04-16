@@ -5,6 +5,7 @@ import type {
   AgentCliCompatibility, DetectionResult, FallbackEvent,
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
+import { extractToolCallsFromText } from './text-coverage-extractor.js';
 
 const ADDDIR_REQUIRED_AGENTS = new Set([
   'ref-doc-verifier',
@@ -25,8 +26,9 @@ export class OpenClawAdapter implements AgentAdapter {
       systemPromptFile: false,
       addDir: false,
       agentDeployment: false,
-      toolLogging: false,
+      toolLogging: true,
       toolControl: false,
+      observabilityLevel: 'heuristic',
     };
   }
 
@@ -80,10 +82,16 @@ export class OpenClawAdapter implements AgentAdapter {
 
     status.durationMs = Date.now() - startTime;
 
+    // Heuristic coverage extraction from text output
+    const toolCallLog = config.sourceFiles
+      ? extractToolCallsFromText(text, config.repoPath, config.sourceFiles)
+      : [];
+
     return {
       text,
       usage: { inputTokens: 0, outputTokens: 0 },
       steps: [],
+      toolCallLog,
       finishReason: 'stop',
       provider: this.name,
       model: this.binary,
@@ -114,7 +122,6 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
     proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
     proc.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
-      process.stderr.write(data);
     });
 
     proc.on('close', (code) => {

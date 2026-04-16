@@ -7,41 +7,30 @@ import type {
 import { resolveApiKey } from '../credential-store.js';
 import { createToolSet, type ToolSetOptions } from '../tool-implementations.js';
 import type { AgentAdapter } from './index.js';
+import type { ProviderRegistry } from '../provider-registry.js';
 
 const DEFAULT_MAX_STEPS = 50;
 
-export function toModelId(provider: ApiProviderName, modelName: string): string {
-  return `${provider}:${modelName}`;
-}
-
-function isRateLimitError(err: unknown): boolean {
-  return err instanceof Error && (
-    err.message.includes('429') || err.message.toLowerCase().includes('rate limit')
-  );
-}
-
-function isAuthError(err: unknown): boolean {
-  return err instanceof Error && (
-    err.message.includes('401') || err.message.includes('403') ||
-    err.message.toLowerCase().includes('unauthorized') || err.message.toLowerCase().includes('forbidden')
-  );
-}
-
-function isServerError(err: unknown): boolean {
-  return err instanceof Error && /5\d{2}/.test(err.message);
-}
+const ENV_MAP: Record<string, string> = {
+  xai: 'XAI_API_KEY',
+  google: 'GOOGLE_GENERATIVE_AI_API_KEY',
+  anthropic: 'ANTHROPIC_API_KEY',
+  openai: 'OPENAI_API_KEY',
+};
 
 export class ApiAdapter implements AgentAdapter {
   readonly type = 'api' as const;
   readonly name: ApiProviderName;
+  private readonly registry: ProviderRegistry | null;
 
-  constructor(name: ApiProviderName) {
+  constructor(name: ApiProviderName, registry?: ProviderRegistry) {
     this.name = name;
+    this.registry = registry ?? null;
   }
 
   detect(): DetectionResult {
-    const providerConfig = { apiKeyEnvVar: this.getEnvVar() };
-    const key = resolveApiKey(providerConfig.apiKeyEnvVar, providerConfig.apiKeyEnvVar);
+    const envVar = ENV_MAP[this.name] ?? `${this.name.toUpperCase()}_API_KEY`;
+    const key = resolveApiKey(envVar, envVar);
     return { installed: key !== null, path: key ? '(API key available)' : undefined };
   }
 
@@ -52,6 +41,7 @@ export class ApiAdapter implements AgentAdapter {
       agentDeployment: true,
       toolLogging: true,
       toolControl: true,
+      observabilityLevel: 'full',
     };
   }
 
@@ -65,8 +55,12 @@ export class ApiAdapter implements AgentAdapter {
     config: OrchestrationConfig,
     status: AgentRunStatus,
     onStatusChange: (s: AgentRunStatus) => void,
-    onFallback: (e: FallbackEvent) => void,
+    _onFallback: (e: FallbackEvent) => void,
   ): Promise<AgentRunResult> {
+    if (!this.registry) {
+      throw new Error(`ApiAdapter "${this.name}": no provider registry — cannot create model`);
+    }
+
     const toolCallLog: ToolCallLogEntry[] = [];
     const toolOpts: ToolSetOptions = {
       repoRoot: config.repoPath,
@@ -79,15 +73,18 @@ export class ApiAdapter implements AgentAdapter {
 
     const agentOverride = config.modelsConfig.agentOverrides[agent.name];
     const maxSteps = agentOverride?.maxSteps ?? DEFAULT_MAX_STEPS;
-    const modelId = toModelId(this.name, status.model);
+
+    // Create model via proxy — keys never enter this process
+    const model = this.registry.createModel(this.name, status.model, status.agentName);
 
     const result = await generateText({
-      model: modelId,
+      model,
       system: agent.systemPrompt,
       prompt: delegationPrompt,
       tools,
       stopWhen: stepCountIs(maxSteps),
       temperature: 0.1,
+      maxRetries: 3,
       onStepFinish: (event) => {
         if (event.usage) {
           status.tokenUsage.input += event.usage.inputTokens ?? 0;
@@ -103,9 +100,7 @@ export class ApiAdapter implements AgentAdapter {
     }
 
     if (result.finishReason === 'length') {
-      process.stderr.write(
-        `  WARNING: ${agent.name} hit context window limit (finishReason=length). Output may be truncated.\n`,
-      );
+      status.error = `Context window limit reached (finishReason=length). Output may be truncated.`;
     }
 
     return {
@@ -118,19 +113,10 @@ export class ApiAdapter implements AgentAdapter {
         toolCalls: s.toolCalls.map(tc => ({ toolName: tc.toolName })),
         toolResults: s.toolResults.map(tr => ({ toolName: tr.toolName })),
       })),
+      toolCallLog,
       finishReason: result.finishReason,
       provider: this.name,
       model: status.model,
     };
-  }
-
-  private getEnvVar(): string {
-    const ENV_MAP: Record<string, string> = {
-      xai: 'XAI_API_KEY',
-      google: 'GOOGLE_GENERATIVE_AI_API_KEY',
-      anthropic: 'ANTHROPIC_API_KEY',
-      openai: 'OPENAI_API_KEY',
-    };
-    return ENV_MAP[this.name] ?? `${this.name.toUpperCase()}_API_KEY`;
   }
 }

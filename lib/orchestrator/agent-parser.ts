@@ -1,4 +1,4 @@
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { AgentDefinition, AgentOverride } from './types.js';
@@ -94,6 +94,29 @@ export function parsePhase1Agents(
   return PHASE1_AGENTS.map(name =>
     parseAgentFile(join(agentsDir, `${name}.md`), overrides),
   );
+}
+
+export function parseAllAgents(
+  agentsDir: string,
+  overrides: Record<string, AgentOverride>,
+): AgentDefinition[] {
+  if (!existsSync(agentsDir)) return [];
+  const files = readdirSync(agentsDir)
+    .filter(f => f.endsWith('.md'))
+    .sort();
+
+  const agents: AgentDefinition[] = [];
+  for (const f of files) {
+    const filePath = join(agentsDir, f);
+    const raw = readFileSync(filePath, 'utf8');
+    // Skip files without YAML frontmatter (e.g. .agent.md, README)
+    if (!raw.startsWith('---\n')) {
+      process.stderr.write(`Skipping non-agent file: ${f}\n`);
+      continue;
+    }
+    agents.push(parseAgentFile(filePath, overrides));
+  }
+  return agents;
 }
 
 export function parseAgentsByNames(

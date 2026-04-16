@@ -104,6 +104,7 @@ NO_INTERACTIVE=""
 COMPOSE_RULES=""
 AUTO_COMPLETE=""
 BASELINE=""
+COVERAGE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -126,6 +127,8 @@ while [[ $# -gt 0 ]]; do
     --compose-rules) COMPOSE_RULES="1"; shift ;;
     --auto-complete) AUTO_COMPLETE="1"; shift ;;
     --baseline)      BASELINE="1"; shift ;;
+    --coverage)      COVERAGE="$2"; shift 2 ;;
+    --concurrency)   CONCURRENCY="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -141,9 +144,11 @@ elif [[ -n "$TRAINING" && -z "$FULL" ]]; then
   MODE="training"
 elif [[ -n "$DOCS" && -z "$FULL" && -z "$TRAINING" ]]; then
   MODE="docs"
+elif [[ -n "$FULL" ]]; then
+  MODE="full"
+  # TRAINING and DOCS become additive flags passed in the prompt
 else
   MODE="review"
-  # TRAINING and DOCS become additive flags passed in the prompt
 fi
 
 # --- Interactive prompts for missing values ---
@@ -189,9 +194,13 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
 
   ENGINE_OPTIONS=()
   ENGINE_OPTION_LABELS=()
+
+  # Orchestrated is always option 1 (default)
+  opt_idx=1
+  ENGINE_OPTIONS+=("orchestrated")
+  ENGINE_OPTION_LABELS+=("Orchestrated — multi-provider engine")
   DEFAULT_ENGINE_IDX=1
 
-  opt_idx=0
   for i in "${!DETECTED_CLI_NAMES[@]}"; do
     cli="${DETECTED_CLI_NAMES[$i]}"
     label="${DETECTED_CLI_LABELS[$i]}"
@@ -200,20 +209,9 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
       continue
     fi
     ((opt_idx++))
-    if [[ "$cli" == "claude" ]]; then
-      ENGINE_OPTIONS+=("claude-direct")
-      ENGINE_OPTION_LABELS+=("Claude CLI — direct mode $label")
-      DEFAULT_ENGINE_IDX=$opt_idx
-    else
-      ENGINE_OPTIONS+=("$cli")
-      ENGINE_OPTION_LABELS+=("$label — orchestrated mode")
-    fi
+    ENGINE_OPTIONS+=("$cli")
+    ENGINE_OPTION_LABELS+=("$label — orchestrated mode")
   done
-
-  # Always add orchestrated multi-provider as last option
-  ((opt_idx++))
-  ENGINE_OPTIONS+=("orchestrated")
-  ENGINE_OPTION_LABELS+=("Orchestrated — multi-provider engine")
 
   for i in "${!ENGINE_OPTIONS[@]}"; do
     idx=$((i + 1))
@@ -230,17 +228,15 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
   selected_idx=$((engine_choice - 1))
   if [[ $selected_idx -ge 0 && $selected_idx -lt ${#ENGINE_OPTIONS[@]} ]]; then
     selected="${ENGINE_OPTIONS[$selected_idx]}"
-    if [[ "$selected" == "claude-direct" ]]; then
-      ENGINE="claude"
-    elif [[ "$selected" == "orchestrated" ]]; then
+    if [[ "$selected" == "orchestrated" ]]; then
       ENGINE="orchestrated"
     else
       ENGINE="orchestrated"
       PROVIDER="$(cli_to_provider "$selected")"
     fi
   else
-    echo "Invalid selection, using default (claude)."
-    ENGINE="claude"
+    echo "Invalid selection, using default (orchestrated)."
+    ENGINE="orchestrated"
   fi
 elif [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -eq 0 ]]; then
   # No CLIs detected — default to orchestrated
@@ -249,7 +245,7 @@ elif [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -e
   echo "Defaulting to orchestrated engine (requires API keys)."
   ENGINE="orchestrated"
 fi
-ENGINE="${ENGINE:-claude}"
+ENGINE="${ENGINE:-orchestrated}"
 
 # --- Interactive scan-type confirmation ---
 EXPLICIT_MODE_FLAG=""
@@ -275,7 +271,7 @@ if [[ -z "$EXPLICIT_MODE_FLAG" && -z "$NO_INTERACTIVE" ]]; then
       FULL=""
       ;;
     2)
-      MODE="review"
+      MODE="full"
       FULL="--full"
       ;;
     3)
@@ -310,7 +306,7 @@ case "$MODE" in
     SKILL_SRC="$SPARFUCHS_ROOT/.claude/skills/qa-docs/SKILL.md"
     REPORTS_DIR="$SPARFUCHS_ROOT/architecture-reports"
     ;;
-  review)
+  review|full)
     # Main qa-review skill (unchanged) — training/docs are add-ons via prompt flags
     REPORTS_DIR="$SPARFUCHS_ROOT/qa-reports"
     ;;
@@ -371,7 +367,7 @@ cleanup() {
     docs)
       rm -f "$REPO/.claude/agents/architecture-doc-builder.md"
       ;;
-    review)
+    review|full)
       for f in "${AGENT_FILES[@]}"; do
         rm -f "$REPO/.claude/agents/$f"
       done
@@ -475,7 +471,7 @@ case "$MODE" in
   docs)
     USER_PROMPT="Generate architecture documentation for this repository."
     ;;
-  review)
+  review|full)
     if [[ -n "$FULL" ]]; then
       USER_PROMPT="Run /qa-review --full for this repository."
     else
@@ -507,7 +503,7 @@ fi
 if [[ -n "$CRED_FILE" ]]; then
   USER_PROMPT="$USER_PROMPT Credentials file: $CRED_FILE"
 fi
-if [[ -n "$MODULE" && "$MODE" == "review" ]]; then
+if [[ -n "$MODULE" && ( "$MODE" == "review" || "$MODE" == "full" ) ]]; then
   USER_PROMPT="$USER_PROMPT SCOPE: Only analyze files under $MODULE/"
 fi
 if [[ -n "$REF_DOCS" ]]; then
@@ -520,7 +516,7 @@ case "$MODE" in
   selective) DISPLAY_MODE="selective: $AGENTS" ;;
   training)  DISPLAY_MODE="standalone training" ;;
   docs)      DISPLAY_MODE="standalone architecture docs" ;;
-  review)
+  review|full)
     DISPLAY_MODE="${FULL:-diff review}"
     [[ -n "$FULL" ]] && DISPLAY_MODE="full audit"
     [[ -n "$TRAINING" ]] && DISPLAY_MODE="$DISPLAY_MODE + training"
@@ -582,7 +578,9 @@ else
   [[ -n "$COMPOSE_RULES" ]] && ORCH_ARGS+=(--compose-rules true)
   [[ -n "$AUTO_COMPLETE" ]] && ORCH_ARGS+=(--auto-complete true)
   [[ -n "$BASELINE" ]] && ORCH_ARGS+=(--baseline true)
+  [[ -n "$COVERAGE" ]] && ORCH_ARGS+=(--coverage "$COVERAGE")
   [[ -n "$PROVIDER" ]] && ORCH_ARGS+=(--provider "$PROVIDER")
+  [[ -n "${CONCURRENCY:-}" ]] && ORCH_ARGS+=(--concurrency "$CONCURRENCY")
   SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
   SPARFUCHS_CRED_PROFILE="${CRED_PROFILE:-}" \
   npx tsx "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" "${ORCH_ARGS[@]}"

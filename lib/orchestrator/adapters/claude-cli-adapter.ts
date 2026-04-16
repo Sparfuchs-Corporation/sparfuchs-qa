@@ -9,6 +9,7 @@ import type {
   AgentCliCompatibility, DetectionResult, FallbackEvent,
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
+import { parseStreamJson } from './stream-json-parser.js';
 
 export class ClaudeCliAdapter implements AgentAdapter {
   readonly name = 'claude-cli' as const;
@@ -24,13 +25,13 @@ export class ClaudeCliAdapter implements AgentAdapter {
       systemPromptFile: true,
       addDir: true,
       agentDeployment: true,
-      toolLogging: false,  // CLI manages tools internally
+      toolLogging: true,
       toolControl: false,
+      observabilityLevel: 'structured',
     };
   }
 
   checkCompatibility(agent: AgentDefinition): AgentCliCompatibility {
-    // Claude CLI supports everything — full compatibility
     return { agentName: agent.name, status: 'full', adaptations: [] };
   }
 
@@ -47,31 +48,39 @@ export class ClaudeCliAdapter implements AgentAdapter {
     status.startedAt = new Date().toISOString();
     onStatusChange(status);
 
-    // Write system prompt to temp file
     const tmpId = randomBytes(4).toString('hex');
     const systemPromptFile = join(tmpdir(), `sparfuchs-sysprompt-${tmpId}.md`);
     writeFileSync(systemPromptFile, agent.systemPrompt, { mode: 0o600 });
 
     try {
       const args = [
+        '--print',
+        '--verbose',                        // required for --output-format stream-json
+        '--output-format', 'stream-json',
         '--append-system-prompt-file', systemPromptFile,
         '--add-dir', config.reportsDir ?? config.sessionLogDir,
         '--add-dir', config.qaDataRoot,
-        '--permission-mode', 'default',
-        delegationPrompt,
+        '--permission-mode', 'bypassPermissions',
+        delegationPrompt,                    // positional prompt — last arg
       ];
 
-      const text = await spawnCli(this.binary, args, config.repoPath);
+      const rawOutput = await spawnCli(this.binary, args, config.repoPath);
+      const parsed = parseStreamJson(rawOutput);
 
       status.durationMs = Date.now() - startTime;
 
+      const text = parsed.text || rawOutput;
+
       return {
         text,
-        usage: { inputTokens: 0, outputTokens: 0 }, // CLI doesn't expose token counts
+        usage: parsed.usage.inputTokens > 0
+          ? parsed.usage
+          : { inputTokens: 0, outputTokens: 0 },
         steps: [],
+        toolCallLog: parsed.toolCallLog,
         finishReason: 'stop',
         provider: this.name,
-        model: this.binary,
+        model: parsed.model ?? this.binary,
       };
     } finally {
       try { unlinkSync(systemPromptFile); } catch { /* already cleaned */ }
@@ -83,7 +92,7 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],   // ignore stdin — no pipe, no 3s wait
       env: { ...process.env },
     });
 
@@ -96,8 +105,6 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
 
     proc.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
-      // Stream stderr to our stderr for live output
-      process.stderr.write(data);
     });
 
     proc.on('close', (code) => {

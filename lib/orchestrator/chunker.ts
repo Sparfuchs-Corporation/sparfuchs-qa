@@ -1,9 +1,8 @@
 import { execSync } from 'node:child_process';
 import { join, dirname, relative } from 'node:path';
-import type { ChunkPlan, FileChunk, AgentDefinition } from './types.js';
+import type { ChunkPlan, FileChunk, AgentDefinition, CoverageStrategy } from './types.js';
+import { getStrategyConfig } from './coverage-babysitter.js';
 
-const DEFAULT_CHUNK_SIZE = 25;
-const MAX_CHUNK_SIZE = 35;
 const CHUNKING_THRESHOLD = 50;
 
 const SOURCE_EXTENSIONS = [
@@ -16,6 +15,7 @@ const EXCLUDE_DIRS = [
   'node_modules', 'dist', 'build', '.next', '.nuxt', 'out',
   'vendor', '__pycache__', '.git', 'coverage', '.turbo',
   'target', 'bin', 'obj', '.cache',
+  '.claude', '.worktrees', 'generated',
 ];
 
 // Agents that need to see every file (general-purpose analysis)
@@ -68,6 +68,7 @@ export function buildChunkPlan(
   allFiles: string[],
   agents: AgentDefinition[],
   excludedFiles: string[] = [],
+  strategy: CoverageStrategy = 'balanced',
 ): ChunkPlan | null {
   const checkableFiles = allFiles.filter(f => !excludedFiles.includes(f));
 
@@ -75,25 +76,27 @@ export function buildChunkPlan(
     return null;
   }
 
-  const chunks = groupIntoChunks(checkableFiles);
+  const strategyConfig = getStrategyConfig(strategy);
+  const chunks = groupIntoChunks(checkableFiles, strategyConfig.chunkSize, strategyConfig.maxChunkSize);
   const agentNames = agents.map(a => a.name);
 
   return {
     totalFiles: allFiles.length,
     checkableFiles: checkableFiles.length,
-    chunkSize: DEFAULT_CHUNK_SIZE,
+    chunkSize: strategyConfig.chunkSize,
     chunks,
     chunkedAgents: agentNames.filter(n => CHUNKED_AGENT_NAMES.has(n)),
     unchunkedAgents: agentNames.filter(n => !CHUNKED_AGENT_NAMES.has(n)),
     excludedFiles,
+    strategy,
   };
 }
 
 /**
- * Group files into chunks of ~DEFAULT_CHUNK_SIZE, keeping files from the same
+ * Group files into chunks of ~chunkSize, keeping files from the same
  * directory together for context coherence.
  */
-function groupIntoChunks(files: string[]): FileChunk[] {
+function groupIntoChunks(files: string[], chunkSize: number, maxChunkSize: number): FileChunk[] {
   // Group by parent directory
   const byDir = new Map<string, string[]>();
   for (const file of files) {
@@ -113,8 +116,8 @@ function groupIntoChunks(files: string[]): FileChunk[] {
   for (const dir of sortedDirs) {
     const dirFiles = byDir.get(dir)!;
 
-    // If adding this directory would exceed MAX_CHUNK_SIZE, flush current chunk first
-    if (currentFiles.length > 0 && currentFiles.length + dirFiles.length > MAX_CHUNK_SIZE) {
+    // If adding this directory would exceed maxChunkSize, flush current chunk first
+    if (currentFiles.length > 0 && currentFiles.length + dirFiles.length > maxChunkSize) {
       chunks.push({
         id: chunks.length + 1,
         files: currentFiles,
@@ -129,7 +132,7 @@ function groupIntoChunks(files: string[]): FileChunk[] {
     }
 
     // If current chunk hit the target size, flush
-    if (currentFiles.length >= DEFAULT_CHUNK_SIZE) {
+    if (currentFiles.length >= chunkSize) {
       chunks.push({
         id: chunks.length + 1,
         files: currentFiles,
@@ -170,6 +173,7 @@ export function buildChunkPromptSuffix(chunk: FileChunk, totalChunks: number, re
  */
 export function formatChunkPlanSummary(plan: ChunkPlan): string {
   const lines = [
+    `Strategy: ${plan.strategy}`,
     `Source files: ${plan.totalFiles} (${plan.checkableFiles} checkable, ${plan.excludedFiles.length} excluded)`,
     `Chunk size: ${plan.chunkSize}`,
     `Chunks: ${plan.chunks.length}`,

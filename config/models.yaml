@@ -14,6 +14,14 @@
 
 defaultProvider: xai
 
+# --- Coverage ---
+# Controls the tradeoff between analysis depth and cost.
+# sweep = fast/cheap (~40% coverage)
+# balanced = moderate (default, ~65% coverage)
+# thorough = deep (~85% coverage)
+# exhaustive = full (~95% coverage)
+coverageStrategy: balanced
+
 # --- Security ---
 # public     = any enabled provider can receive repo data
 # internal   = only providers on your org-approved list (configure approvedProviders below)

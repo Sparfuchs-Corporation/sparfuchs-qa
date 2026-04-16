@@ -6,7 +6,7 @@ import type {
 } from './types.js';
 import { isApiProvider } from './types.js';
 import type { QaFinding } from '../types.js';
-import { toModelId } from './adapters/api-adapter.js';
+import type { ProviderRegistry } from './provider-registry.js';
 
 const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic', 'openai']);
 
@@ -113,7 +113,10 @@ async function semanticAudit(
   result: AgentRunResult,
   config: ModelsYaml,
   agentProvider: ProviderName,
+  registry: ProviderRegistry | null,
 ): Promise<{ issue: QualityIssue | null; auditProvider: ProviderName | undefined }> {
+  if (!registry) return { issue: null, auditProvider: undefined };
+
   // Pick a DIFFERENT provider
   // Quality audit requires an API provider (calls generateText directly)
   const auditProvider = config.fallbackChain.find(
@@ -122,9 +125,10 @@ async function semanticAudit(
   if (!auditProvider) return { issue: null, auditProvider: undefined };
 
   try {
-    const modelId = toModelId(auditProvider as ApiProviderName, config.tiers.light[auditProvider as ApiProviderName]);
+    const modelName = config.tiers.light[auditProvider as ApiProviderName];
+    const model = registry.createModel(auditProvider as ApiProviderName, modelName, `audit-${agentName}`);
     const audit = await generateText({
-      model: modelId,
+      model,
       prompt:
         `You are a QA audit checker. Review this agent output and answer: ` +
         `Does it show evidence of thorough analysis? List any signs of incomplete work, ` +
@@ -160,10 +164,12 @@ export class QualityAuditor {
   private results: QualityAuditResult[] = [];
   private config: OrchestrationConfig;
   private modelsConfig: ModelsYaml;
+  private registry: ProviderRegistry | null;
 
-  constructor(config: OrchestrationConfig, modelsConfig: ModelsYaml) {
+  constructor(config: OrchestrationConfig, modelsConfig: ModelsYaml, registry?: ProviderRegistry) {
     this.config = config;
     this.modelsConfig = modelsConfig;
+    this.registry = registry ?? null;
   }
 
   async check(
@@ -189,7 +195,7 @@ export class QualityAuditor {
     if (giveUpIssue) issues.push(giveUpIssue);
 
     const { issue: semanticIssue, auditProvider } = await semanticAudit(
-      agentName, result, this.modelsConfig, status.provider,
+      agentName, result, this.modelsConfig, status.provider, this.registry,
     );
     if (semanticIssue) issues.push(semanticIssue);
 

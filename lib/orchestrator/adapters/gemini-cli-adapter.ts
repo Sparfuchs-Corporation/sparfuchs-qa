@@ -5,12 +5,7 @@ import type {
   AgentCliCompatibility, DetectionResult, FallbackEvent,
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
-
-// Agents that require --add-dir for qa-data or external references
-const ADDDIR_REQUIRED_AGENTS = new Set([
-  'ref-doc-verifier',
-  'workflow-extractor',
-]);
+import { parseStreamJson } from './stream-json-parser.js';
 
 export class GeminiCliAdapter implements AgentAdapter {
   readonly name = 'gemini-cli' as const;
@@ -26,23 +21,21 @@ export class GeminiCliAdapter implements AgentAdapter {
       systemPromptFile: false,
       addDir: true,
       agentDeployment: false,
-      toolLogging: false,
+      toolLogging: true,
       toolControl: false,
+      observabilityLevel: 'structured',
     };
   }
 
   checkCompatibility(agent: AgentDefinition, config: OrchestrationConfig): AgentCliCompatibility {
     const adaptations: string[] = [];
 
-    // System prompt must be inlined
     if (agent.systemPrompt) {
       adaptations.push('System prompt inlined into user prompt');
     }
 
-    // @agent-name references won't work — adapted but functional
     adaptations.push('@agent-name references stripped (Gemini CLI does not support agent deployment)');
 
-    // disableBash agents: CLI may still allow bash — warning
     if (agent.disableBash) {
       adaptations.push('WARNING: disableBash not enforceable — Gemini CLI manages its own tool access');
     }
@@ -67,26 +60,37 @@ export class GeminiCliAdapter implements AgentAdapter {
     status.startedAt = new Date().toISOString();
     onStatusChange(status);
 
-    // Inline system prompt since Gemini CLI doesn't support system prompt files
     const combinedPrompt = buildInlinedPrompt(agent.systemPrompt, delegationPrompt);
 
+    // -p '' triggers headless mode; actual prompt piped via stdin.
+    // Gemini docs: "-p value is appended to input on stdin (if any)"
+    // --yolo auto-approves all tool actions (no terminal for approval).
     const args = [
       '--sandbox',
-      '--add-dir', config.reportsDir ?? config.sessionLogDir,
-      '--add-dir', config.qaDataRoot,
-      combinedPrompt,
+      '--yolo',
+      '--output-format', 'stream-json',
+      '--include-directories', config.reportsDir ?? config.sessionLogDir,
+      '--include-directories', config.qaDataRoot,
+      '-p', '',
     ];
-    const text = await spawnCli(this.binary, args, config.repoPath);
+
+    const rawOutput = await spawnCli(this.binary, args, config.repoPath, combinedPrompt);
+    const parsed = parseStreamJson(rawOutput);
 
     status.durationMs = Date.now() - startTime;
 
+    const text = parsed.text || rawOutput;
+
     return {
       text,
-      usage: { inputTokens: 0, outputTokens: 0 },
+      usage: parsed.usage.inputTokens > 0
+        ? parsed.usage
+        : { inputTokens: 0, outputTokens: 0 },
       steps: [],
+      toolCallLog: parsed.toolCallLog,
       finishReason: 'stop',
       provider: this.name,
-      model: this.binary,
+      model: parsed.model ?? this.binary,
     };
   }
 }
@@ -100,7 +104,12 @@ function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
   );
 }
 
-function spawnCli(binary: string, args: string[], cwd: string): Promise<string> {
+function spawnCli(
+  binary: string,
+  args: string[],
+  cwd: string,
+  stdinInput: string,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
@@ -114,7 +123,6 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
     proc.stdout.on('data', (data: Buffer) => { stdout += data.toString(); });
     proc.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
-      process.stderr.write(data);
     });
 
     proc.on('close', (code) => {
@@ -125,5 +133,8 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
     proc.on('error', (err) => {
       reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
     });
+
+    proc.stdin.write(stdinInput);
+    proc.stdin.end();
   });
 }

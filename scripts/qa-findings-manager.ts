@@ -274,6 +274,63 @@ export function parseFindingTags(agentOutput: string, agentName: string): QaFind
   return findings;
 }
 
+// --- Parse agent-data tags from agent output (inter-agent data exchange) ---
+
+const AGENT_DATA_TAG_REGEX = /<!-- agent-data: ({.*?}) -->/g;
+
+export function parseAgentDataTags(agentOutput: string): Record<string, unknown> {
+  const data: Record<string, unknown> = {};
+  let match;
+
+  while ((match = AGENT_DATA_TAG_REGEX.exec(agentOutput)) !== null) {
+    try {
+      const raw = JSON.parse(match[1]) as Record<string, unknown>;
+      Object.assign(data, raw);
+    } catch {
+      // Skip malformed agent-data tags
+    }
+  }
+
+  return data;
+}
+
+export function writeAgentOutputEnvelope(
+  runDir: string,
+  agentName: string,
+  runId: string,
+  status: 'complete' | 'failed' | 'partial',
+  data: Record<string, unknown>,
+  findings: Array<{ severity: string; category: string }>,
+): void {
+  const agentDataDir = join(runDir, 'agent-data');
+  mkdirSync(agentDataDir, { recursive: true });
+
+  const bySeverity: Record<string, number> = {};
+  const byCategory: Record<string, number> = {};
+  for (const f of findings) {
+    bySeverity[f.severity] = (bySeverity[f.severity] ?? 0) + 1;
+    byCategory[f.category] = (byCategory[f.category] ?? 0) + 1;
+  }
+
+  const envelope = {
+    agent: agentName,
+    runId,
+    completedAt: new Date().toISOString(),
+    status,
+    data,
+    findingSummary: {
+      total: findings.length,
+      bySeverity,
+      byCategory,
+    },
+  };
+
+  writeFileSync(
+    join(agentDataDir, `${agentName}.json`),
+    JSON.stringify(envelope, null, 2),
+  );
+}
+
 // --- Utilities ---
 
 function severityRank(severity: string): number {
