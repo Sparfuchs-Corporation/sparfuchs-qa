@@ -86,9 +86,9 @@ export class TtyRenderer {
 
     // Agent rows — viewport to fit terminal height
     const termRows = process.stderr.rows || process.stdout.rows || 40;
-    // Reserve lines for: header(2) + blank + progress bars(~4) + blank + column header + blank + footer(1) + detail(~5)
-    const chromeLines = lines.length + 3 + (this.showDetail ? 14 : 0);
-    const maxVisibleRows = Math.max(5, termRows - chromeLines);
+    // Reserve space for: footer(2) + possible ▲/▼ indicators(2) + detail panel
+    const reservedLines = 4 + (this.showDetail ? 14 : 0);
+    const maxVisibleRows = Math.max(3, termRows - lines.length - reservedLines);
     const totalRows = snapshot.agentRows.length;
 
     // Auto-scroll to keep running agents visible
@@ -171,6 +171,13 @@ export class TtyRenderer {
       `${counts.failed} failed | ` +
       `[q]uit [p]ause [s]ort [d]etail [?]help`,
     );
+
+    // Hard clamp — never write more lines than the terminal can display.
+    // If we exceed termRows, the terminal scrolls and the ANSI cursor
+    // rewind on the next render can't clear past the scroll top.
+    if (lines.length >= termRows) {
+      lines.length = termRows - 1;
+    }
 
     const output = lines.join('\n') + '\n';
     process.stderr.write(output);

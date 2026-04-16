@@ -33,6 +33,10 @@ function isServerError(err: unknown): boolean {
 const AUTH_FAIL_THRESHOLD = 3;
 const authFailCounts = new Map<ProviderName, number>();
 
+// Retry config for transient failures (rate limits, server errors)
+const MAX_RETRIES_PER_PROVIDER = 2;
+const RETRY_BASE_MS = 3_000;
+
 // --- Runner ---
 
 export async function runAgent(
@@ -57,56 +61,71 @@ export async function runAgent(
   for (const { provider, model: modelName } of fallbackChain) {
     status.provider = provider;
     status.model = modelName;
-    status.status = status.retryCount > 0 ? 'retrying' : 'running';
-    onStatusChange(status);
 
-    try {
-      const adapter = getAdapter(provider);
+    const adapter = getAdapter(provider);
 
-      // Check compatibility for CLI providers
-      if (adapter.type === 'cli') {
-        const compat = adapter.checkCompatibility(agent, config);
-        if (compat.status === 'skipped') {
-          throw new Error(`Agent ${agent.name} incompatible with ${provider}: ${compat.skipReason}`);
-        }
+    // Check compatibility for CLI providers
+    if (adapter.type === 'cli') {
+      const compat = adapter.checkCompatibility(agent, config);
+      if (compat.status === 'skipped') {
+        lastError = new Error(`Agent ${agent.name} incompatible with ${provider}: ${compat.skipReason}`);
+        status.fallbacksUsed.push(provider);
+        continue;
       }
+    }
 
-      const result = await adapter.run(
-        agent, delegationPrompt, config, status, onStatusChange, onFallback,
-      );
+    // Retry loop within the same provider for transient failures
+    for (let attempt = 0; attempt <= MAX_RETRIES_PER_PROVIDER; attempt++) {
+      status.status = attempt > 0 ? 'retrying' : (status.retryCount > 0 ? 'retrying' : 'running');
+      onStatusChange(status);
 
-      return result;
-    } catch (err: unknown) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      status.retryCount++;
+      try {
+        const result = await adapter.run(
+          agent, delegationPrompt, config, status, onStatusChange, onFallback,
+        );
+        return result;
+      } catch (err: unknown) {
+        lastError = err instanceof Error ? err : new Error(String(err));
 
-      const reason = isRateLimitError(err) ? 'rate-limit'
-        : isAuthError(err) ? 'auth-error'
-        : isServerError(err) ? 'server-error'
-        : 'unknown';
+        const isRetryable = isRateLimitError(err) || isServerError(err);
 
-      if (isAuthError(err)) {
-        const count = (authFailCounts.get(provider) ?? 0) + 1;
-        authFailCounts.set(provider, count);
-        if (count >= AUTH_FAIL_THRESHOLD) {
-          const providerConfig = config.modelsConfig.providers[provider];
-          if (providerConfig) providerConfig.enabled = false;
+        if (isRetryable && attempt < MAX_RETRIES_PER_PROVIDER) {
+          const delay = RETRY_BASE_MS * Math.pow(2, attempt); // 3s, 6s
+          await new Promise(r => setTimeout(r, delay));
+          continue; // retry same provider
         }
+
+        // Non-retryable or retries exhausted — log and move to next provider
+        status.retryCount++;
+
+        const reason = isRateLimitError(err) ? 'rate-limit'
+          : isAuthError(err) ? 'auth-error'
+          : isServerError(err) ? 'server-error'
+          : 'unknown';
+
+        if (isAuthError(err)) {
+          const count = (authFailCounts.get(provider) ?? 0) + 1;
+          authFailCounts.set(provider, count);
+          if (count >= AUTH_FAIL_THRESHOLD) {
+            const providerConfig = config.modelsConfig.providers[provider];
+            if (providerConfig) providerConfig.enabled = false;
+          }
+        }
+
+        const nextIdx = fallbackChain.findIndex(f => f.provider === provider) + 1;
+        const nextProvider = nextIdx < fallbackChain.length ? fallbackChain[nextIdx].provider : provider;
+
+        onFallback({
+          agentName: agent.name,
+          fromProvider: provider,
+          toProvider: nextProvider,
+          reason,
+          timestamp: new Date().toISOString(),
+        });
+
+        status.fallbacksUsed.push(provider);
+        break; // move to next provider in chain
       }
-
-      const nextIdx = fallbackChain.findIndex(f => f.provider === provider) + 1;
-      const nextProvider = nextIdx < fallbackChain.length ? fallbackChain[nextIdx].provider : provider;
-
-      onFallback({
-        agentName: agent.name,
-        fromProvider: provider,
-        toProvider: nextProvider,
-        reason,
-        timestamp: new Date().toISOString(),
-      });
-
-      status.fallbacksUsed.push(provider);
-      continue;
     }
   }
 

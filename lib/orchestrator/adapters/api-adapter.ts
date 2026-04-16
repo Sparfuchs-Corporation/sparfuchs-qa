@@ -83,6 +83,7 @@ export class ApiAdapter implements AgentAdapter {
       tools,
       stopWhen: stepCountIs(maxSteps),
       temperature: 0.1,
+      maxRetries: 3,
       onStepFinish: (event) => {
         if (event.usage) {
           status.tokenUsage.input += event.usage.inputTokens ?? 0;
