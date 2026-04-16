@@ -408,6 +408,14 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   }
   const limit = createLimiter(concurrency);
 
+  // Abort controller — triggered by quit request, interrupts agent retries and sleeps
+  const abortController = new AbortController();
+  const checkQuit = setInterval(() => {
+    if (dashboard.isQuitRequested() && !abortController.signal.aborted) {
+      abortController.abort();
+    }
+  }, 500);
+
   // Execute jobs with concurrency
   const tasks = jobs.map(({ agent, chunk, label: agentLabel }) => limit(async () => {
     // Check stop conditions before starting
@@ -465,6 +473,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         agentToRun, delegationPrompt, config, status,
         () => { /* status updates happen via RunState refresh */ },
         (e) => runState.recordFallback(e),
+        abortController.signal,
       );
 
       const outputPath = join(config.sessionLogDir, `${formatTime()}_${agentLabel}.md`);
@@ -526,6 +535,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   }));
 
   await Promise.allSettled(tasks);
+  clearInterval(checkQuit);
   dashboard.teardown();
 
   // 8.5. Shut down auth proxy

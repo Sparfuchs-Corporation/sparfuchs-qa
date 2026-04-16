@@ -33,6 +33,15 @@ function isServerError(err: unknown): boolean {
 const AUTH_FAIL_THRESHOLD = 3;
 const authFailCounts = new Map<ProviderName, number>();
 
+/** Sleep that resolves early if the abort signal fires. */
+function interruptibleSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    if (signal?.aborted) { resolve(); return; }
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+  });
+}
+
 // Retry config for transient failures
 // Rate limits are per-minute, so backoff must be long enough for the window to reset.
 const MAX_RETRIES_PER_PROVIDER = 3;
@@ -48,6 +57,7 @@ export async function runAgent(
   status: AgentRunStatus,
   onStatusChange: (status: AgentRunStatus) => void,
   onFallback: (event: FallbackEvent) => void,
+  abortSignal?: AbortSignal,
 ): Promise<AgentRunResult> {
   // Build fallback chain
   const { provider: preferredProvider, model: preferredModel } =
@@ -78,6 +88,7 @@ export async function runAgent(
 
     // Retry loop within the same provider for transient failures
     for (let attempt = 0; attempt <= MAX_RETRIES_PER_PROVIDER; attempt++) {
+      if (abortSignal?.aborted) break;
       status.status = attempt > 0 ? 'retrying' : (status.retryCount > 0 ? 'retrying' : 'running');
       onStatusChange(status);
 
@@ -97,7 +108,9 @@ export async function runAgent(
           // Server errors need shorter backoff: 5s, 10s, 20s
           const baseMs = isRateLimit ? RATE_LIMIT_RETRY_MS : SERVER_ERROR_RETRY_MS;
           const delay = baseMs * Math.pow(2, attempt);
-          await new Promise(r => setTimeout(r, delay));
+          // Sleep is interruptible via abort signal (quit requested)
+          await interruptibleSleep(delay, abortSignal);
+          if (abortSignal?.aborted) break;
           continue; // retry same provider
         }
 
