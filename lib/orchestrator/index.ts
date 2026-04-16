@@ -82,24 +82,40 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       process.stderr.write(`  Keys:  ${proxyProviders.map(p => `${p} (keychain)`).join(', ')}\n`);
 
       // Pre-flight validation — make a minimal API call per provider
-      const validationModels: Record<string, string> = {};
+      // Build validation entries for every tier that the available providers serve
+      const validationEntries: Array<{ provider: ApiProviderName; model: string; tier: string }> = [];
+      const tiers = ['light', 'mid', 'heavy'] as const;
       for (const p of proxyProviders) {
         const ap = p as ApiProviderName;
-        validationModels[ap] = modelsConfig.tiers.light[ap];
+        for (const tier of tiers) {
+          const model = modelsConfig.tiers[tier]?.[ap];
+          if (model) {
+            validationEntries.push({ provider: ap, model, tier });
+          }
+        }
       }
 
       process.stderr.write('\n--- Provider Validation ---\n');
-      const results = await registry.validateAll(validationModels);
+      const results = await registry.validateAll(validationEntries);
       for (const r of results) {
         if (r.status === 'ok') {
-          process.stderr.write(`  \u2713 ${r.provider}: ${validationModels[r.provider] ?? 'unknown'} responded (${r.latencyMs}ms)\n`);
+          process.stderr.write(`  \u2713 ${r.provider}/${r.tier}: ${r.model} responded (${r.latencyMs}ms)\n`);
         } else if (r.status === 'error') {
-          process.stderr.write(`  \u2717 ${r.provider}: ${r.error}\n`);
-          // Disable provider that failed validation
-          const providerConfig = modelsConfig.providers[r.provider];
-          if (providerConfig) providerConfig.enabled = false;
+          process.stderr.write(`  \u2717 ${r.provider}/${r.tier}: ${r.model} \u2014 ${r.error}\n`);
         } else {
           process.stderr.write(`  \u2014 ${r.provider}: skipped (no key)\n`);
+        }
+      }
+
+      // Disable provider only if ALL tiers fail (not just one)
+      for (const p of proxyProviders) {
+        const ap = p as ApiProviderName;
+        const providerResults = results.filter(r => r.provider === ap);
+        const allFailed = providerResults.length > 0 && providerResults.every(r => r.status === 'error');
+        if (allFailed) {
+          const providerConfig = modelsConfig.providers[ap];
+          if (providerConfig) providerConfig.enabled = false;
+          process.stderr.write(`  \u26A0 ${ap}: disabled (all tiers failed validation)\n`);
         }
       }
       process.stderr.write('\n');

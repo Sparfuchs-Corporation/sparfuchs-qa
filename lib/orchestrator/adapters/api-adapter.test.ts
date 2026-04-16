@@ -282,28 +282,36 @@ describe('Provider Registry', () => {
     }
   });
 
-  it('should validate each available provider with a real API call', async () => {
+  it('should validate each available provider with a real API call across all tiers', async () => {
     assert.ok(registry);
-    // Use light-tier models for validation
-    const validationModels: Record<string, string> = {
-      anthropic: 'claude-haiku-4-5',
-      xai: 'grok-code-fast-1',
-      google: 'gemini-3.1-flash-lite-preview',
-      openai: 'gpt-5.4-nano',
+    const tierModels: Record<string, Record<string, string>> = {
+      anthropic: { light: 'claude-haiku-4-5', mid: 'claude-sonnet-4-6', heavy: 'claude-opus-4-6' },
+      xai: { light: 'grok-code-fast-1', mid: 'grok-4-1-fast-reasoning', heavy: 'grok-4.20-reasoning' },
+      google: { light: 'gemini-3.1-flash-lite-preview', mid: 'gemini-3-flash-preview', heavy: 'gemini-3.1-pro-preview' },
+      openai: { light: 'gpt-5.4-nano', mid: 'gpt-5.4-mini', heavy: 'gpt-5.4' },
     };
 
-    const results = await registry.validateAll(validationModels);
+    const entries: Array<{ provider: 'xai' | 'google' | 'anthropic' | 'openai'; model: string; tier: string }> = [];
+    const available = new Set(registry.getAvailableProviders());
+    for (const [provider, tiers] of Object.entries(tierModels)) {
+      if (!available.has(provider as any)) continue;
+      for (const [tier, model] of Object.entries(tiers)) {
+        entries.push({ provider: provider as any, model, tier });
+      }
+    }
+
+    const results = await registry.validateAll(entries);
     console.log('    Validation results:');
     for (const r of results) {
       const status = r.status === 'ok' ? `OK (${r.latencyMs}ms)`
         : r.status === 'error' ? `ERROR: ${r.error}`
         : `SKIPPED: ${r.error ?? 'no key'}`;
-      console.log(`      ${r.provider}: ${status}`);
+      console.log(`      ${r.provider}/${r.tier}: ${r.model} — ${status}`);
     }
 
-    // At least one provider should validate successfully
+    // At least one provider/tier should validate successfully
     const anyOk = results.some(r => r.status === 'ok');
-    assert.ok(anyOk, 'At least one provider should pass validation');
+    assert.ok(anyOk, 'At least one provider/tier should pass validation');
   });
 });
 

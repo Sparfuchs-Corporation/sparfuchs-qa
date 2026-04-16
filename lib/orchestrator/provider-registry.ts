@@ -26,6 +26,8 @@ import type { ApiProviderName } from './types.js';
 
 export interface ValidationResult {
   provider: ApiProviderName;
+  model: string;
+  tier: string;
   status: 'ok' | 'error' | 'skipped';
   latencyMs: number;
   error?: string;
@@ -281,11 +283,11 @@ export class ProviderRegistry {
   }
 
   /**
-   * Validate a provider by making a minimal API call through the proxy.
+   * Validate a specific provider + model combination with a minimal API call.
    */
-  async validateProvider(provider: ApiProviderName, modelName: string): Promise<ValidationResult> {
+  async validateProvider(provider: ApiProviderName, modelName: string, tier = 'unknown'): Promise<ValidationResult> {
     if (!this.availableProviders.has(provider)) {
-      return { provider, status: 'skipped', latencyMs: 0, error: 'No key available' };
+      return { provider, model: modelName, tier, status: 'skipped', latencyMs: 0, error: 'No key available' };
     }
 
     const start = Date.now();
@@ -296,30 +298,40 @@ export class ProviderRegistry {
         prompt: 'Respond with the single word OK.',
         maxOutputTokens: 5,
       });
-      return { provider, status: 'ok', latencyMs: Date.now() - start };
+      return { provider, model: modelName, tier, status: 'ok', latencyMs: Date.now() - start };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      // Strip any potentially sensitive content from error messages
       const safeMsg = msg.replace(/key[=:]\s*\S+/gi, 'key=[REDACTED]');
-      return { provider, status: 'error', latencyMs: Date.now() - start, error: safeMsg };
+      return { provider, model: modelName, tier, status: 'error', latencyMs: Date.now() - start, error: safeMsg };
     }
   }
 
   /**
-   * Validate all available providers. Returns results for each.
+   * Validate all provider + tier combinations that agents will actually use.
+   * Accepts a list of { provider, model, tier } entries — one per unique
+   * provider/tier combo needed by the agent set.
    */
-  async validateAll(validationModels: Record<string, string>): Promise<ValidationResult[]> {
+  async validateAll(
+    entries: Array<{ provider: ApiProviderName; model: string; tier: string }>,
+  ): Promise<ValidationResult[]> {
     const results: ValidationResult[] = [];
     const allProviders: ApiProviderName[] = ['xai', 'google', 'anthropic', 'openai'];
+    const entryMap = new Map<string, { provider: ApiProviderName; model: string; tier: string }>();
+
+    for (const e of entries) {
+      entryMap.set(`${e.provider}:${e.tier}`, e);
+    }
 
     for (const provider of allProviders) {
-      const modelName = validationModels[provider];
-      if (!modelName) {
-        results.push({ provider, status: 'skipped', latencyMs: 0, error: 'No model configured' });
+      const providerEntries = entries.filter(e => e.provider === provider);
+      if (providerEntries.length === 0) {
+        results.push({ provider, model: '', tier: '', status: 'skipped', latencyMs: 0, error: 'No key available' });
         continue;
       }
-      const result = await this.validateProvider(provider, modelName);
-      results.push(result);
+      for (const entry of providerEntries) {
+        const result = await this.validateProvider(provider, entry.model, entry.tier);
+        results.push(result);
+      }
     }
 
     return results;
