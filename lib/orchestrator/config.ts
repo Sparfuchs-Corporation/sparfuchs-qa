@@ -212,13 +212,16 @@ function resolveProviderMeta(
 
 /**
  * Derive a provider type constraint from the raw PROVIDER override.
- * "API" → 'api' (only API providers allowed), "CLI" → 'cli', anything else → undefined.
+ * "API" → 'api', "CLI" or specific CLI name → 'cli', anything else → undefined.
+ * When a specific CLI provider is selected (e.g. "claude-cli"), the fallback chain
+ * is constrained to CLI-only — zero API fallback, no exceptions.
  */
 export function resolveProviderConstraint(raw: string | undefined): 'api' | 'cli' | undefined {
   if (!raw) return undefined;
   const lower = raw.toLowerCase();
   if (lower === 'api') return 'api';
   if (lower === 'cli') return 'cli';
+  if (lower.endsWith('-cli') || lower === 'openclaw') return 'cli';
   return undefined;
 }
 

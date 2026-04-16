@@ -69,13 +69,8 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const { available, disabled } = resolveProviderKeys(modelsConfig);
 
   // 2.5. Start auth proxy and validate API providers
-  // Skip entirely when the user explicitly selected a CLI provider — no need to
-  // validate API keys, start the proxy, or waste time on pre-flight calls.
   const registry = new ProviderRegistry();
-  const cliOnly = config.providerOverride
-    && modelsConfig.providers[config.providerOverride]
-    && !isApiProvider(modelsConfig.providers[config.providerOverride]);
-  const apiProviders = cliOnly ? [] : available.filter(p => {
+  const apiProviders = available.filter(p => {
     const cfg = modelsConfig.providers[p];
     return cfg && isApiProvider(cfg);
   });

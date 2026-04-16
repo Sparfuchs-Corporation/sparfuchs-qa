@@ -72,15 +72,18 @@ export class GeminiCliAdapter implements AgentAdapter {
     // Inline system prompt since Gemini CLI doesn't support system prompt files
     const combinedPrompt = buildInlinedPrompt(agent.systemPrompt, delegationPrompt);
 
+    // Prompt is passed via stdin to avoid arg-length limits.
+    // --yolo auto-approves all tool use (no terminal for approval in headless mode).
+    // -p with stdin: Gemini appends stdin to the -p value.
     const args = [
       '--sandbox',
+      '--yolo',
       '--output-format', 'stream-json',
       '--include-directories', config.reportsDir ?? config.sessionLogDir,
       '--include-directories', config.qaDataRoot,
-      '--prompt', combinedPrompt,
     ];
 
-    const rawOutput = await spawnCli(this.binary, args, config.repoPath);
+    const rawOutput = await spawnCli(this.binary, args, config.repoPath, combinedPrompt);
     const parsed = parseStreamJson(rawOutput);
 
     status.durationMs = Date.now() - startTime;
@@ -111,7 +114,12 @@ function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
   );
 }
 
-function spawnCli(binary: string, args: string[], cwd: string): Promise<string> {
+function spawnCli(
+  binary: string,
+  args: string[],
+  cwd: string,
+  stdinInput: string,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
@@ -135,5 +143,9 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
     proc.on('error', (err) => {
       reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
     });
+
+    // Write prompt via stdin and close — avoids arg-length limits
+    proc.stdin.write(stdinInput);
+    proc.stdin.end();
   });
 }

@@ -55,17 +55,18 @@ export class ClaudeCliAdapter implements AgentAdapter {
     writeFileSync(systemPromptFile, agent.systemPrompt, { mode: 0o600 });
 
     try {
+      // Prompt is passed via stdin to avoid arg-length limits.
+      // bypassPermissions is required: --print mode has no terminal for approval prompts.
       const args = [
         '--print',
         '--output-format', 'stream-json',
         '--append-system-prompt-file', systemPromptFile,
         '--add-dir', config.reportsDir ?? config.sessionLogDir,
         '--add-dir', config.qaDataRoot,
-        '--permission-mode', 'default',
-        delegationPrompt,
+        '--permission-mode', 'bypassPermissions',
       ];
 
-      const rawOutput = await spawnCli(this.binary, args, config.repoPath);
+      const rawOutput = await spawnCli(this.binary, args, config.repoPath, delegationPrompt);
       const parsed = parseStreamJson(rawOutput);
 
       status.durationMs = Date.now() - startTime;
@@ -90,7 +91,12 @@ export class ClaudeCliAdapter implements AgentAdapter {
   }
 }
 
-function spawnCli(binary: string, args: string[], cwd: string): Promise<string> {
+function spawnCli(
+  binary: string,
+  args: string[],
+  cwd: string,
+  stdinInput: string,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
@@ -120,5 +126,9 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
     proc.on('error', (err) => {
       reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
     });
+
+    // Write prompt via stdin and close — avoids arg-length limits
+    proc.stdin.write(stdinInput);
+    proc.stdin.end();
   });
 }

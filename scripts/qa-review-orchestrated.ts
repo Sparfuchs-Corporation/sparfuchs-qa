@@ -52,8 +52,10 @@ async function main(): Promise<void> {
 
   // Derive project slug from repo directory name
   const projectSlug = repoPath.split('/').pop()!.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-  const dateStr = new Date().toISOString().slice(0, 10);
-  const sessionLogDir = join(reportsDir, `${dateStr}_${projectSlug}_session-log`);
+  const now = new Date();
+  const dateStr = now.toISOString().slice(0, 10);
+  const timeStr = now.toISOString().slice(11, 16).replace(':', '');
+  const sessionLogDir = join(reportsDir, `${dateStr}_${timeStr}_${projectSlug}_session-log`);
 
   const config: OrchestrationConfig = {
     repoPath,
