@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { generateText } from 'ai';
 import type { DocClaim, DocClaimType, ModelsYaml, ApiProviderName } from './types.js';
 import { isApiProvider } from './types.js';
-import { toModelId } from './adapters/api-adapter.js';
+import type { ProviderRegistry } from './provider-registry.js';
 
 const API_PROVIDER_NAMES = new Set<string>(['xai', 'google', 'anthropic', 'openai']);
 
@@ -21,6 +21,7 @@ export async function processReferenceDocs(
   paths: string[],
   runDir: string,
   modelsConfig: ModelsYaml,
+  registry?: ProviderRegistry,
 ): Promise<string> {
   const allClaims: DocClaim[] = [];
 
@@ -37,7 +38,7 @@ export async function processReferenceDocs(
     }
 
     process.stderr.write(`  Extracting claims from: ${filename} (${text.length} chars)\n`);
-    const claims = await extractClaims(text, filename, modelsConfig);
+    const claims = await extractClaims(text, filename, modelsConfig, registry);
     allClaims.push(...claims);
     process.stderr.write(`  Found ${claims.length} verifiable claims in ${filename}\n`);
   }
@@ -148,6 +149,7 @@ async function extractClaims(
   docText: string,
   filename: string,
   modelsConfig: ModelsYaml,
+  registry?: ProviderRegistry,
 ): Promise<DocClaim[]> {
   // Chunk large documents
   const chunks = chunkText(docText, MAX_CHUNK_CHARS, OVERLAP_CHARS);
@@ -158,7 +160,7 @@ async function extractClaims(
     const chunkLabel = chunks.length > 1 ? ` (chunk ${i + 1}/${chunks.length})` : '';
 
     try {
-      const claims = await extractClaimsFromChunk(chunk, filename, chunkLabel, modelsConfig);
+      const claims = await extractClaimsFromChunk(chunk, filename, chunkLabel, modelsConfig, registry);
       allClaims.push(...claims);
     } catch (err) {
       process.stderr.write(`  WARNING: Claim extraction failed for ${filename}${chunkLabel}: ${err}\n`);
@@ -174,7 +176,10 @@ async function extractClaimsFromChunk(
   filename: string,
   chunkLabel: string,
   modelsConfig: ModelsYaml,
+  registry?: ProviderRegistry,
 ): Promise<DocClaim[]> {
+  if (!registry) throw new Error('No provider registry — cannot extract claims without API access');
+
   // Ref-doc extraction requires an API provider (calls generateText directly)
   let provider = modelsConfig.defaultProvider;
   if (!API_PROVIDER_NAMES.has(provider)) {
@@ -184,7 +189,7 @@ async function extractClaimsFromChunk(
   }
   const apiProvider = provider as ApiProviderName;
   const modelName = modelsConfig.tiers.mid[apiProvider];
-  const modelId = toModelId(apiProvider, modelName);
+  const model = registry.createModel(apiProvider, modelName, `ref-doc-${filename}`);
 
   const prompt = `Extract every verifiable factual claim from this document. For each claim, output a JSON object on its own line (JSONL format).
 
@@ -210,7 +215,7 @@ ${text}
 Output ONLY valid JSONL (one JSON object per line). No other text.`;
 
   const result = await generateText({
-    model: modelId,
+    model,
     prompt,
     temperature: 0.1,
   });

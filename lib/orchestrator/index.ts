@@ -26,15 +26,17 @@ import { ClaudeCliAdapter } from './adapters/claude-cli-adapter.js';
 import { GeminiCliAdapter } from './adapters/gemini-cli-adapter.js';
 import { CodexCliAdapter } from './adapters/codex-cli-adapter.js';
 import { OpenClawAdapter } from './adapters/openclaw-adapter.js';
+import { ProviderRegistry } from './provider-registry.js';
+import type { ApiProviderName } from './types.js';
 
 // --- Register all adapters ---
 
-function initAdapters(): void {
-  // API adapters
-  registerAdapter(new ApiAdapter('xai'));
-  registerAdapter(new ApiAdapter('google'));
-  registerAdapter(new ApiAdapter('anthropic'));
-  registerAdapter(new ApiAdapter('openai'));
+function initAdapters(registry?: ProviderRegistry): void {
+  // API adapters — pass registry for secure key proxy routing
+  registerAdapter(new ApiAdapter('xai', registry));
+  registerAdapter(new ApiAdapter('google', registry));
+  registerAdapter(new ApiAdapter('anthropic', registry));
+  registerAdapter(new ApiAdapter('openai', registry));
 
   // CLI adapters
   registerAdapter(new ClaudeCliAdapter());
@@ -44,9 +46,6 @@ function initAdapters(): void {
 }
 
 export async function runOrchestration(config: OrchestrationConfig): Promise<void> {
-  // 0. Initialize adapters
-  initAdapters();
-
   // 1. Load and validate config
   const modelsConfig = loadModelsConfig();
   config.modelsConfig = modelsConfig;
@@ -68,11 +67,53 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   enforceDataClassification(modelsConfig);
   const { available, disabled } = resolveProviderKeys(modelsConfig);
 
-  // 3. Consent prompt — only for API providers
+  // 2.5. Start auth proxy and validate API providers
+  const registry = new ProviderRegistry();
   const apiProviders = available.filter(p => {
     const cfg = modelsConfig.providers[p];
     return cfg && isApiProvider(cfg);
   });
+
+  if (apiProviders.length > 0) {
+    process.stderr.write('\n--- Auth Proxy ---\n');
+    try {
+      const proxyProviders = await registry.startProxy();
+      process.stderr.write(`  Proxy: listening (session-secured, Unix socket)\n`);
+      process.stderr.write(`  Keys:  ${proxyProviders.map(p => `${p} (keychain)`).join(', ')}\n`);
+
+      // Pre-flight validation — make a minimal API call per provider
+      const validationModels: Record<string, string> = {};
+      for (const p of proxyProviders) {
+        const ap = p as ApiProviderName;
+        validationModels[ap] = modelsConfig.tiers.light[ap];
+      }
+
+      process.stderr.write('\n--- Provider Validation ---\n');
+      const results = await registry.validateAll(validationModels);
+      for (const r of results) {
+        if (r.status === 'ok') {
+          process.stderr.write(`  \u2713 ${r.provider}: ${validationModels[r.provider] ?? 'unknown'} responded (${r.latencyMs}ms)\n`);
+        } else if (r.status === 'error') {
+          process.stderr.write(`  \u2717 ${r.provider}: ${r.error}\n`);
+          // Disable provider that failed validation
+          const providerConfig = modelsConfig.providers[r.provider];
+          if (providerConfig) providerConfig.enabled = false;
+        } else {
+          process.stderr.write(`  \u2014 ${r.provider}: skipped (no key)\n`);
+        }
+      }
+      process.stderr.write('\n');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`  Auth proxy failed: ${msg}\n`);
+      process.stderr.write(`  API providers will be unavailable — falling back to CLI providers only.\n\n`);
+    }
+  }
+
+  // 2.6. Initialize adapters with registry
+  initAdapters(registry);
+
+  // 3. Consent prompt — only for API providers
   if (apiProviders.length > 0) {
     await showConsentPrompt(apiProviders, config.repoPath);
   }
@@ -316,7 +357,15 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
   dashboard.start();
 
-  const auditor = new QualityAuditor(config, modelsConfig);
+  const auditor = new QualityAuditor(config, modelsConfig, registry);
+
+  // Wire proxy telemetry into RunState for live dashboard token tracking
+  registry.onTelemetry((event) => {
+    const status = runState.getAgent(event.agentId);
+    if (status) {
+      status.lastHeartbeat = Date.now();
+    }
+  });
   let budgetExceeded = false;
 
   // Concurrency limiter
@@ -406,7 +455,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       // Record coverage via babysitter (single source of truth)
       const { capped: cappedLog, droppedCount } = capToolCallLog(result.toolCallLog);
       if (droppedCount > 0) {
-        process.stderr.write(`  toolCallLog capped: ${droppedCount} entries had args dropped\n`);
+        status.error = `toolCallLog capped: ${droppedCount} entries had args dropped`;
       }
       if (babysittingEnabled) {
         babysitter.recordAgentRun(agentLabel, cappedLog);
@@ -442,9 +491,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
       const auditResult = await auditor.check(agentLabel, result, findings, status);
       if (!auditResult.passed) {
-        process.stderr.write(
-          `  QUALITY WARNING [${agentLabel}]: ${auditResult.issues.length} issue(s), score: ${auditResult.score}/100\n`,
-        );
+        status.error = `Quality: ${auditResult.issues.length} issue(s), score: ${auditResult.score}/100`;
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -460,7 +507,10 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   await Promise.allSettled(tasks);
   dashboard.teardown();
 
-  // 8.5. Post-run finding deduplication
+  // 8.5. Shut down auth proxy
+  await registry.shutdown();
+
+  // 8.6. Post-run finding deduplication
   const dedupResult = deduplicateFindings(findingsPath, runDir);
   if (dedupResult.removed > 0) {
     process.stderr.write(

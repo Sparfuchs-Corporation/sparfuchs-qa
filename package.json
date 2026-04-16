@@ -21,10 +21,10 @@
     "qa:sync": "tsx scripts/qa-firestore-sync.ts"
   },
   "dependencies": {
-    "@ai-sdk/anthropic": "^1.0.0",
-    "@ai-sdk/google": "^1.0.0",
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
     "@ai-sdk/openai": "^3.0.53",
-    "@ai-sdk/xai": "^1.0.0",
+    "@ai-sdk/xai": "^3.0.0",
     "ai": "^6.0.0",
     "fast-glob": "^3.3.0",
     "yaml": "^2.7.0",

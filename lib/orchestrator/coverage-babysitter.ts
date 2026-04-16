@@ -23,7 +23,7 @@ const STRATEGY_CONFIGS: Record<CoverageStrategy, CoverageStrategyConfig> = {
   balanced: {
     chunkSize: 45,
     maxChunkSize: 55,
-    maxChunksPerAgent: null,
+    maxChunksPerAgent: 10,
     targetCoveragePercent: 65,
     retryLowCoverageChunks: false,
     lowCoverageThreshold: 0,
@@ -35,7 +35,7 @@ const STRATEGY_CONFIGS: Record<CoverageStrategy, CoverageStrategyConfig> = {
   thorough: {
     chunkSize: 25,
     maxChunkSize: 35,
-    maxChunksPerAgent: null,
+    maxChunksPerAgent: 20,
     targetCoveragePercent: 85,
     retryLowCoverageChunks: true,
     lowCoverageThreshold: 50,
@@ -47,7 +47,7 @@ const STRATEGY_CONFIGS: Record<CoverageStrategy, CoverageStrategyConfig> = {
   exhaustive: {
     chunkSize: 18,
     maxChunkSize: 25,
-    maxChunksPerAgent: null,
+    maxChunksPerAgent: 40,
     targetCoveragePercent: 95,
     retryLowCoverageChunks: true,
     lowCoverageThreshold: 60,

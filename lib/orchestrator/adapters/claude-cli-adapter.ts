@@ -97,8 +97,6 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
 
     proc.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
-      // Stream stderr to our stderr for live output
-      process.stderr.write(data);
     });
 
     proc.on('close', (code) => {

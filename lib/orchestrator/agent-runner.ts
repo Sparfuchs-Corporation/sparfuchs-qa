@@ -3,7 +3,7 @@ import type {
   OrchestrationConfig, ProviderName, FallbackEvent,
 } from './types.js';
 import { isCliProvider, isApiProvider } from './types.js';
-import { resolveModelForAgent } from './config.js';
+import { resolveModelForAgent, resolveProviderConstraint } from './config.js';
 import { getAdapter } from './adapters/index.js';
 
 // --- Error Classification (used for fallback decisions) ---
@@ -47,8 +47,9 @@ export async function runAgent(
   const { provider: preferredProvider, model: preferredModel } =
     resolveModelForAgent(agent.name, agent.tier, config.modelsConfig, config.providerOverride);
 
+  const providerConstraint = resolveProviderConstraint(config.providerOverride as string | undefined);
   const fallbackChain = buildFallbackChain(
-    preferredProvider, preferredModel, agent, config,
+    preferredProvider, preferredModel, agent, config, providerConstraint,
   );
 
   let lastError: Error | null = null;
@@ -124,6 +125,7 @@ function buildFallbackChain(
   preferredModel: string,
   agent: AgentDefinition,
   config: OrchestrationConfig,
+  providerConstraint?: 'api' | 'cli' | undefined,
 ): Array<{ provider: ProviderName; model: string }> {
   const chain = [{ provider: preferredProvider, model: preferredModel }];
 
@@ -133,8 +135,10 @@ function buildFallbackChain(
     if (!pConfig?.enabled) continue;
 
     if (isCliProvider(pConfig)) {
+      if (providerConstraint === 'api') continue;
       chain.push({ provider: p, model: pConfig.binary });
     } else if (API_PROVIDER_NAMES.has(p)) {
+      if (providerConstraint === 'cli') continue;
       chain.push({
         provider: p,
         model: config.modelsConfig.tiers[agent.tier][p as 'xai' | 'google' | 'anthropic'],

@@ -67,27 +67,42 @@ export class DashboardController {
         return;
       }
 
-      switch (key.toLowerCase()) {
+      const totalRows = this.state.snapshot().agentRows.length;
+
+      switch (key) {
         case 'q':
+        case 'Q':
           this.quitRequested = true;
           break;
         case 'p':
+        case 'P':
           this.paused = true;
           break;
         case 'r':
+        case 'R':
           this.paused = false;
           break;
         case 's':
+        case 'S':
           this.cycleSortField();
           break;
         case 'd':
+        case 'D':
           this.renderer.toggleDetail();
           break;
         case 'h':
         case '?':
           this.renderer.toggleHelp();
           break;
-        case '\x1b': // Escape
+        case 'k':
+        case '\x1b[A': // Arrow up
+          this.renderer.scrollUp();
+          break;
+        case 'j':
+        case '\x1b[B': // Arrow down
+          this.renderer.scrollDown(5, totalRows);
+          break;
+        case '\x1b': // Escape (bare, not part of arrow sequence)
           if (this.renderer.isShowingHelp()) this.renderer.toggleHelp();
           break;
       }

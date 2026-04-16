@@ -210,6 +210,18 @@ function resolveProviderMeta(
   return raw as ProviderName;
 }
 
+/**
+ * Derive a provider type constraint from the raw PROVIDER override.
+ * "API" → 'api' (only API providers allowed), "CLI" → 'cli', anything else → undefined.
+ */
+export function resolveProviderConstraint(raw: string | undefined): 'api' | 'cli' | undefined {
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+  if (lower === 'api') return 'api';
+  if (lower === 'cli') return 'cli';
+  return undefined;
+}
+
 export function resolveModelForAgent(
   agentName: string,
   tier: ModelTier,

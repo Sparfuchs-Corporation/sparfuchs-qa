@@ -146,7 +146,6 @@ function spawnCli(
     });
     proc.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
-      process.stderr.write(data);
     });
 
     proc.on('close', (code) => {

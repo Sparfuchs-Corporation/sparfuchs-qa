@@ -14,6 +14,7 @@ export class TtyRenderer {
   private tableLines = 0;
   private showDetail = false;
   private showHelp = false;
+  private scrollOffset = 0;
 
   render(snapshot: RunStateSnapshot): void {
     if (this.showHelp) {
@@ -83,8 +84,34 @@ export class TtyRenderer {
       + 'Duration';
     lines.push(`\x1b[4m${hdr}\x1b[0m`);
 
-    // Agent rows
-    for (const row of snapshot.agentRows) {
+    // Agent rows — viewport to fit terminal height
+    const termRows = process.stderr.rows || process.stdout.rows || 40;
+    // Reserve lines for: header(2) + blank + progress bars(~4) + blank + column header + blank + footer(1) + detail(~5)
+    const chromeLines = lines.length + 3 + (this.showDetail ? 14 : 0);
+    const maxVisibleRows = Math.max(5, termRows - chromeLines);
+    const totalRows = snapshot.agentRows.length;
+
+    // Auto-scroll to keep running agents visible
+    if (totalRows > maxVisibleRows) {
+      const firstRunningIdx = snapshot.agentRows.findIndex(r => r.status === 'running');
+      if (firstRunningIdx >= 0) {
+        // Center the running agents in the viewport
+        this.scrollOffset = Math.max(0, Math.min(
+          firstRunningIdx - Math.floor(maxVisibleRows / 3),
+          totalRows - maxVisibleRows,
+        ));
+      }
+    } else {
+      this.scrollOffset = 0;
+    }
+
+    const visibleRows = snapshot.agentRows.slice(this.scrollOffset, this.scrollOffset + maxVisibleRows);
+
+    if (this.scrollOffset > 0) {
+      lines.push(`\x1b[90m  \u25B2 ${this.scrollOffset} agents above\x1b[0m`);
+    }
+
+    for (const row of visibleRows) {
       const icon = STATUS_ICONS[row.status] ?? '  ';
       const statusColor = row.status === 'complete' ? '\x1b[32m'
         : row.status === 'failed' ? '\x1b[31m'
@@ -112,6 +139,11 @@ export class TtyRenderer {
         + errorSuffix;
 
       lines.push(line);
+    }
+
+    const hiddenBelow = totalRows - this.scrollOffset - visibleRows.length;
+    if (hiddenBelow > 0) {
+      lines.push(`\x1b[90m  \u25BC ${hiddenBelow} agents below\x1b[0m`);
     }
 
     // Active agent detail panel
@@ -145,6 +177,16 @@ export class TtyRenderer {
     this.tableLines = lines.length;
   }
 
+  scrollUp(lines = 5): void {
+    this.scrollOffset = Math.max(0, this.scrollOffset - lines);
+  }
+
+  scrollDown(lines = 5, totalRows = 0): void {
+    if (totalRows > 0) {
+      this.scrollOffset = Math.min(totalRows - 1, this.scrollOffset + lines);
+    }
+  }
+
   toggleDetail(): void {
     this.showDetail = !this.showDetail;
   }
@@ -176,6 +218,8 @@ export class TtyRenderer {
       '            write partial results, exit cleanly',
       '  Ctrl+C    Same as q (first press). Force kill (second press).',
       '',
+      '  j / \u2193     Scroll agent list down',
+      '  k / \u2191     Scroll agent list up',
       '  s         Cycle sort order: name \u2192 status \u2192 duration \u2192 findings \u2192 coverage',
       '  d         Toggle detail panel: show/hide active agent file checklist',
       '  p         Pause \u2014 finish current agent, hold queue',
