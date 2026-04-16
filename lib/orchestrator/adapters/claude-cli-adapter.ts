@@ -48,23 +48,20 @@ export class ClaudeCliAdapter implements AgentAdapter {
     status.startedAt = new Date().toISOString();
     onStatusChange(status);
 
-    // Write system prompt to temp file
     const tmpId = randomBytes(4).toString('hex');
     const systemPromptFile = join(tmpdir(), `sparfuchs-sysprompt-${tmpId}.md`);
     writeFileSync(systemPromptFile, agent.systemPrompt, { mode: 0o600 });
 
     try {
-      // bypassPermissions: --print mode has no terminal for approval prompts.
-      // -- separates flags from the positional prompt argument.
       const args = [
         '--print',
+        '--verbose',                        // required for --output-format stream-json
         '--output-format', 'stream-json',
         '--append-system-prompt-file', systemPromptFile,
         '--add-dir', config.reportsDir ?? config.sessionLogDir,
         '--add-dir', config.qaDataRoot,
         '--permission-mode', 'bypassPermissions',
-        '--',
-        delegationPrompt,
+        delegationPrompt,                    // positional prompt — last arg
       ];
 
       const rawOutput = await spawnCli(this.binary, args, config.repoPath);
@@ -95,7 +92,7 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
-      stdio: ['pipe', 'pipe', 'pipe'],
+      stdio: ['ignore', 'pipe', 'pipe'],   // ignore stdin — no pipe, no 3s wait
       env: { ...process.env },
     });
 

@@ -1,8 +1,4 @@
 import { spawn } from 'node:child_process';
-import { writeFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { randomBytes } from 'node:crypto';
 import type {
   AgentDefinition, AgentRunResult, AgentRunStatus,
   OrchestrationConfig, AdapterCapabilities,
@@ -10,12 +6,6 @@ import type {
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
 import { parseStreamJson } from './stream-json-parser.js';
-
-// Agents that require --add-dir for qa-data or external references
-const ADDDIR_REQUIRED_AGENTS = new Set([
-  'ref-doc-verifier',
-  'workflow-extractor',
-]);
 
 export class GeminiCliAdapter implements AgentAdapter {
   readonly name = 'gemini-cli' as const;
@@ -70,45 +60,38 @@ export class GeminiCliAdapter implements AgentAdapter {
     status.startedAt = new Date().toISOString();
     onStatusChange(status);
 
-    // Inline system prompt since Gemini CLI doesn't support system prompt files.
-    // Write to temp file and pipe via stdin to avoid arg-length limits with -p.
     const combinedPrompt = buildInlinedPrompt(agent.systemPrompt, delegationPrompt);
-    const tmpId = randomBytes(4).toString('hex');
-    const promptFile = join(tmpdir(), `sparfuchs-gemini-prompt-${tmpId}.txt`);
-    writeFileSync(promptFile, combinedPrompt, { mode: 0o600 });
 
-    try {
-      // --yolo auto-approves all tool use (headless, no terminal for approval).
-      // Prompt piped via stdin; -p triggers headless mode with empty value.
-      const args = [
-        '--sandbox',
-        '--yolo',
-        '--output-format', 'stream-json',
-        '--include-directories', config.reportsDir ?? config.sessionLogDir,
-        '--include-directories', config.qaDataRoot,
-      ];
+    // -p '' triggers headless mode; actual prompt piped via stdin.
+    // Gemini docs: "-p value is appended to input on stdin (if any)"
+    // --yolo auto-approves all tool actions (no terminal for approval).
+    const args = [
+      '--sandbox',
+      '--yolo',
+      '--output-format', 'stream-json',
+      '--include-directories', config.reportsDir ?? config.sessionLogDir,
+      '--include-directories', config.qaDataRoot,
+      '-p', '',
+    ];
 
-      const rawOutput = await spawnCliWithStdin(this.binary, args, config.repoPath, promptFile);
-      const parsed = parseStreamJson(rawOutput);
+    const rawOutput = await spawnCli(this.binary, args, config.repoPath, combinedPrompt);
+    const parsed = parseStreamJson(rawOutput);
 
-      status.durationMs = Date.now() - startTime;
+    status.durationMs = Date.now() - startTime;
 
-      const text = parsed.text || rawOutput;
+    const text = parsed.text || rawOutput;
 
-      return {
-        text,
-        usage: parsed.usage.inputTokens > 0
-          ? parsed.usage
-          : { inputTokens: 0, outputTokens: 0 },
-        steps: [],
-        toolCallLog: parsed.toolCallLog,
-        finishReason: 'stop',
-        provider: this.name,
-        model: parsed.model ?? this.binary,
-      };
-    } finally {
-      try { unlinkSync(promptFile); } catch { /* already cleaned */ }
-    }
+    return {
+      text,
+      usage: parsed.usage.inputTokens > 0
+        ? parsed.usage
+        : { inputTokens: 0, outputTokens: 0 },
+      steps: [],
+      toolCallLog: parsed.toolCallLog,
+      finishReason: 'stop',
+      provider: this.name,
+      model: parsed.model ?? this.binary,
+    };
   }
 }
 
@@ -121,20 +104,13 @@ function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
   );
 }
 
-/**
- * Spawn Gemini CLI and pipe the prompt file content via stdin.
- * Gemini reads stdin when no -p value is provided, triggering headless mode.
- */
-function spawnCliWithStdin(
+function spawnCli(
   binary: string,
   args: string[],
   cwd: string,
-  promptFile: string,
+  stdinInput: string,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
-    const { readFileSync } = require('node:fs') as typeof import('node:fs');
-    const promptContent = readFileSync(promptFile, 'utf8');
-
     const proc = spawn(binary, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -158,8 +134,7 @@ function spawnCliWithStdin(
       reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
     });
 
-    // Write prompt via stdin — avoids arg-length limits
-    proc.stdin.write(promptContent);
+    proc.stdin.write(stdinInput);
     proc.stdin.end();
   });
 }
