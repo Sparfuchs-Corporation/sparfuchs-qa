@@ -147,7 +147,7 @@ export function createToolSet(agent: AgentDefinition, options: ToolSetOptions) {
   // --- Read ---
   tools.Read = {
     description: 'Read a file from the filesystem. Returns contents with line numbers.',
-    parameters: z.object({
+    inputSchema: z.object({
       file_path: z.string().describe('Absolute path to the file'),
       offset: z.number().optional().describe('Line number to start reading from (0-based)'),
       limit: z.number().optional().describe('Maximum number of lines to read'),
@@ -176,7 +176,7 @@ export function createToolSet(agent: AgentDefinition, options: ToolSetOptions) {
   // --- Grep ---
   tools.Grep = {
     description: 'Search file contents with regex using ripgrep.',
-    parameters: z.object({
+    inputSchema: z.object({
       pattern: z.string().describe('Regex pattern to search for'),
       path: z.string().optional().describe('File or directory to search in'),
       glob: z.string().optional().describe('Glob pattern to filter files (e.g. "*.ts")'),
@@ -215,7 +215,7 @@ export function createToolSet(agent: AgentDefinition, options: ToolSetOptions) {
   // --- Glob ---
   tools.Glob = {
     description: 'Find files matching a glob pattern.',
-    parameters: z.object({
+    inputSchema: z.object({
       pattern: z.string().describe('Glob pattern (e.g. "**/*.ts", "src/**/*.tsx")'),
       path: z.string().optional().describe('Directory to search in'),
     }),
@@ -243,7 +243,7 @@ export function createToolSet(agent: AgentDefinition, options: ToolSetOptions) {
   if (!agent.disableBash && agent.tools.includes('Bash')) {
     tools.Bash = {
       description: 'Execute a shell command. Only read-only commands are allowed.',
-      parameters: z.object({
+      inputSchema: z.object({
         command: z.string().describe('The command to execute'),
         timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000)'),
       }),
