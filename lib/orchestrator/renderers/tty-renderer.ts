@@ -161,7 +161,14 @@ export class TtyRenderer {
       }
     }
 
-    // Footer
+    // Hard clamp — never write more lines than the terminal can display.
+    // Clamp BEFORE the footer so footer is always visible.
+    const footerSize = 2; // blank line + status/shortcuts
+    if (lines.length >= termRows - footerSize) {
+      lines.length = termRows - footerSize - 1;
+    }
+
+    // Footer (always rendered, never clipped)
     lines.push('');
     const counts = snapshot.agents;
     lines.push(
@@ -171,13 +178,6 @@ export class TtyRenderer {
       `${counts.failed} failed | ` +
       `[q]uit [p]ause [s]ort [d]etail [?]help`,
     );
-
-    // Hard clamp — never write more lines than the terminal can display.
-    // If we exceed termRows, the terminal scrolls and the ANSI cursor
-    // rewind on the next render can't clear past the scroll top.
-    if (lines.length >= termRows) {
-      lines.length = termRows - 1;
-    }
 
     const output = lines.join('\n') + '\n';
     process.stderr.write(output);

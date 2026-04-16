@@ -167,6 +167,12 @@ function buildFallbackChain(
 ): Array<{ provider: ProviderName; model: string }> {
   const chain = [{ provider: preferredProvider, model: preferredModel }];
 
+  // Specific provider selected → zero fallback, that provider only
+  const override = config.providerOverride as string | undefined;
+  if (override && override !== 'api' && override !== 'cli') {
+    return chain;
+  }
+
   for (const p of config.modelsConfig.fallbackChain) {
     if (p === preferredProvider) continue;
     const pConfig = config.modelsConfig.providers[p];

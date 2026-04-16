@@ -1,4 +1,8 @@
 import { spawn } from 'node:child_process';
+import { writeFileSync, unlinkSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { randomBytes } from 'node:crypto';
 import type {
   AgentDefinition, AgentRunResult, AgentRunStatus,
   OrchestrationConfig, AdapterCapabilities,
@@ -36,15 +40,12 @@ export class GeminiCliAdapter implements AgentAdapter {
   checkCompatibility(agent: AgentDefinition, config: OrchestrationConfig): AgentCliCompatibility {
     const adaptations: string[] = [];
 
-    // System prompt must be inlined
     if (agent.systemPrompt) {
       adaptations.push('System prompt inlined into user prompt');
     }
 
-    // @agent-name references won't work — adapted but functional
     adaptations.push('@agent-name references stripped (Gemini CLI does not support agent deployment)');
 
-    // disableBash agents: CLI may still allow bash — warning
     if (agent.disableBash) {
       adaptations.push('WARNING: disableBash not enforceable — Gemini CLI manages its own tool access');
     }
@@ -69,39 +70,45 @@ export class GeminiCliAdapter implements AgentAdapter {
     status.startedAt = new Date().toISOString();
     onStatusChange(status);
 
-    // Inline system prompt since Gemini CLI doesn't support system prompt files
+    // Inline system prompt since Gemini CLI doesn't support system prompt files.
+    // Write to temp file and pipe via stdin to avoid arg-length limits with -p.
     const combinedPrompt = buildInlinedPrompt(agent.systemPrompt, delegationPrompt);
+    const tmpId = randomBytes(4).toString('hex');
+    const promptFile = join(tmpdir(), `sparfuchs-gemini-prompt-${tmpId}.txt`);
+    writeFileSync(promptFile, combinedPrompt, { mode: 0o600 });
 
-    // Prompt is passed via stdin to avoid arg-length limits.
-    // --yolo auto-approves all tool use (no terminal for approval in headless mode).
-    // -p with stdin: Gemini appends stdin to the -p value.
-    const args = [
-      '--sandbox',
-      '--yolo',
-      '--output-format', 'stream-json',
-      '--include-directories', config.reportsDir ?? config.sessionLogDir,
-      '--include-directories', config.qaDataRoot,
-    ];
+    try {
+      // --yolo auto-approves all tool use (headless, no terminal for approval).
+      // Prompt piped via stdin; -p triggers headless mode with empty value.
+      const args = [
+        '--sandbox',
+        '--yolo',
+        '--output-format', 'stream-json',
+        '--include-directories', config.reportsDir ?? config.sessionLogDir,
+        '--include-directories', config.qaDataRoot,
+      ];
 
-    const rawOutput = await spawnCli(this.binary, args, config.repoPath, combinedPrompt);
-    const parsed = parseStreamJson(rawOutput);
+      const rawOutput = await spawnCliWithStdin(this.binary, args, config.repoPath, promptFile);
+      const parsed = parseStreamJson(rawOutput);
 
-    status.durationMs = Date.now() - startTime;
+      status.durationMs = Date.now() - startTime;
 
-    // Fallback: if stream-json parsing yielded no text, use raw output
-    const text = parsed.text || rawOutput;
+      const text = parsed.text || rawOutput;
 
-    return {
-      text,
-      usage: parsed.usage.inputTokens > 0
-        ? parsed.usage
-        : { inputTokens: 0, outputTokens: 0 },
-      steps: [],
-      toolCallLog: parsed.toolCallLog,
-      finishReason: 'stop',
-      provider: this.name,
-      model: parsed.model ?? this.binary,
-    };
+      return {
+        text,
+        usage: parsed.usage.inputTokens > 0
+          ? parsed.usage
+          : { inputTokens: 0, outputTokens: 0 },
+        steps: [],
+        toolCallLog: parsed.toolCallLog,
+        finishReason: 'stop',
+        provider: this.name,
+        model: parsed.model ?? this.binary,
+      };
+    } finally {
+      try { unlinkSync(promptFile); } catch { /* already cleaned */ }
+    }
   }
 }
 
@@ -114,13 +121,20 @@ function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
   );
 }
 
-function spawnCli(
+/**
+ * Spawn Gemini CLI and pipe the prompt file content via stdin.
+ * Gemini reads stdin when no -p value is provided, triggering headless mode.
+ */
+function spawnCliWithStdin(
   binary: string,
   args: string[],
   cwd: string,
-  stdinInput: string,
+  promptFile: string,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    const { readFileSync } = require('node:fs') as typeof import('node:fs');
+    const promptContent = readFileSync(promptFile, 'utf8');
+
     const proc = spawn(binary, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -144,8 +158,8 @@ function spawnCli(
       reject(new Error(`Failed to spawn ${binary}: ${err.message}`));
     });
 
-    // Write prompt via stdin and close — avoids arg-length limits
-    proc.stdin.write(stdinInput);
+    // Write prompt via stdin — avoids arg-length limits
+    proc.stdin.write(promptContent);
     proc.stdin.end();
   });
 }
