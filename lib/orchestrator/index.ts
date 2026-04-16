@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 
 import * as readline from 'node:readline';
 import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
 import { isApiProvider } from './types.js';
-import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent } from './config.js';
+import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent, resolveProviderConstraint } from './config.js';
 import { parseAgentsByNames, parsePhase1Agents, parseAllAgents, validateAgentIntegrity } from './agent-parser.js';
 import { runAgent, interruptibleSleep } from './agent-runner.js';
 import { RunState } from './run-state.js';
@@ -69,8 +69,10 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const { available, disabled } = resolveProviderKeys(modelsConfig);
 
   // 2.5. Start auth proxy and validate API providers
+  // Skip when user explicitly selected a CLI provider — zero API involvement.
   const registry = new ProviderRegistry();
-  const apiProviders = available.filter(p => {
+  const providerConstraint = resolveProviderConstraint(config.providerOverride);
+  const apiProviders = providerConstraint === 'cli' ? [] : available.filter(p => {
     const cfg = modelsConfig.providers[p];
     return cfg && isApiProvider(cfg);
   });
