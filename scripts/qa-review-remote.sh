@@ -209,13 +209,8 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
       continue
     fi
     ((opt_idx++))
-    if [[ "$cli" == "claude" ]]; then
-      ENGINE_OPTIONS+=("claude-direct")
-      ENGINE_OPTION_LABELS+=("Claude CLI — direct mode $label")
-    else
-      ENGINE_OPTIONS+=("$cli")
-      ENGINE_OPTION_LABELS+=("$label — orchestrated mode")
-    fi
+    ENGINE_OPTIONS+=("$cli")
+    ENGINE_OPTION_LABELS+=("$label — orchestrated mode")
   done
 
   for i in "${!ENGINE_OPTIONS[@]}"; do
@@ -233,9 +228,7 @@ if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 
   selected_idx=$((engine_choice - 1))
   if [[ $selected_idx -ge 0 && $selected_idx -lt ${#ENGINE_OPTIONS[@]} ]]; then
     selected="${ENGINE_OPTIONS[$selected_idx]}"
-    if [[ "$selected" == "claude-direct" ]]; then
-      ENGINE="claude"
-    elif [[ "$selected" == "orchestrated" ]]; then
+    if [[ "$selected" == "orchestrated" ]]; then
       ENGINE="orchestrated"
     else
       ENGINE="orchestrated"
