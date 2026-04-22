@@ -27,9 +27,9 @@ __pycache__/
 .venv/
 venv/
 
-# From sparfuchs-qa-llm
 .env.local
 CLAUDE.local.md
+**/settings.local.json
 qa-reports/
 qa-data/
 training-reports/
