@@ -180,7 +180,7 @@ to GCS and flagged as Draft. It does not run in CI.
 
 ### Approved
 
-A human reviewer approves the test via the Anvil QA dashboard. The test is
+A human reviewer approves the test via the QA review dashboard. The test is
 now eligible to run but is not yet trusted.
 
 ### Active

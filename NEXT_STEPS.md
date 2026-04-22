@@ -3,7 +3,7 @@
 **Written:** 2026-04-13 22:43 PDT
 **Written by:** session-cleanup agent
 **Project:** Sparfuchs QA
-**Repo:** https://github.com/Sparfuchs-Pro/sparfuchs-qa
+**Repo:** https://github.com/Sparfuchs-Pro/sparfuchs-qa-llm
 
 ---
 

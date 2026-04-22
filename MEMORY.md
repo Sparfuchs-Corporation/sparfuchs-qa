@@ -3,7 +3,7 @@
 ## Project Identity
 
 - **Name:** Sparfuchs QA
-- **Repo:** https://github.com/Sparfuchs-Pro/sparfuchs-qa
+- **Repo:** https://github.com/Sparfuchs-Pro/sparfuchs-qa-llm
 - **Owner:** Sparfuchs-Pro
 - **Primary Language:** TypeScript
 

@@ -25,7 +25,7 @@ flowchart LR
         C -->|Build artifacts + results| G[GCS Bucket]
         G --> H[QA Cloud Functions]
         H --> I[Firestore — Findings]
-        I --> J[Anvil QA Dashboard]
+        I --> J[QA Review Dashboard]
     end
 
     subgraph Test Sync
@@ -35,7 +35,7 @@ flowchart LR
 
 Cloud Build runs canaries and unit tests on every push. Build results and
 artifacts are written to a GCS bucket. QA Cloud Functions process these
-results, detect gaps, and write findings to Firestore. The Anvil QA Dashboard
+results, detect gaps, and write findings to Firestore. The QA Review Dashboard
 surfaces findings for human review.
 
 ---
@@ -71,7 +71,7 @@ is the mandatory gate between AI-generated drafts and CI execution.
 | QA Cloud Functions | `<your-gcp-project>` | Cloud Functions v2 (Node 20) |
 | QA Firestore | `<your-gcp-project>` | Firestore (qa_* collections) |
 | GCS Test Bucket | `<your-gcp-project>` | `gs://qa-platform-tests` |
-| Anvil QA Dashboard | Anvil repo | React MFE in Anvil shell |
+| QA Review Dashboard | external dashboard repo | React MFE |
 | Canary Runner | In-repo | `npx tsx` (local + Cloud Build) |
 | AI Baseline Checker | QA Cloud Function | Scheduled (daily) |
 
@@ -313,7 +313,7 @@ introducing false confidence or incorrect assertions.
 | 1. **Forced system prompt** | Test generation prompt includes repo structure and conventions | `generateTestDraft` function |
 | 2. **Schema validation** | Generated tests must parse as valid TypeScript/Python | Pre-write validation in Cloud Function |
 | 3. **Import verification** | All imports in generated tests must resolve to real modules | Static analysis before GCS write |
-| 4. **Human review gate** | No test runs in CI without explicit human approval | Anvil QA Dashboard |
+| 4. **Human review gate** | No test runs in CI without explicit human approval | QA Review Dashboard |
 | 5. **Graduation ratchet** | Tests must prove reliability before they can block deploys | `promoteTest` function |
 | 6. **Golden response diffing** | AI baseline responses compared against known-good outputs | `runAiBaselines` function |
 | 7. **Demotion circuit breaker** | Flaky graduated tests are automatically demoted | `promoteTest` function |

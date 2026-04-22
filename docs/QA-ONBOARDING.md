@@ -86,7 +86,7 @@ All artifacts are written locally under `qa-data/<project>/runs/<runId>/`.
 
 1. **Finding** — QA Platform detects a gap (missing test, flaky behavior, coverage hole)
 2. **Test generation** — Platform drafts a test and writes it to GCS as a Draft
-3. **Review** — A human approves or rejects the draft via the Anvil QA dashboard
+3. **Review** — A human approves or rejects the draft via the QA review dashboard
 4. **Activation** — Approved tests are committed into the repo (Firestore-backed sync has been removed)
 5. **Graduation** — Once a test passes consistently for 5+ builds, it graduates to the permanent suite
 6. **Evolution** — `make qa-evolve` analyzes canary history and suggests threshold tightening for stable canaries or investigation for unstable ones
@@ -148,4 +148,4 @@ If the canary fails, you will see its name, severity, hint, and value in the out
 
 - Read [TESTING-GUIDE.md](./TESTING-GUIDE.md) for detailed test-type reference
 - Read [QA-ARCHITECTURE.md](./QA-ARCHITECTURE.md) for system design and Firestore schema
-- Check the Anvil QA dashboard for current findings and test status
+- Check the QA review dashboard for current findings and test status
