@@ -1,0 +1,36 @@
+{
+  "name": "sparfuchs-qa",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Sparfuchs QA Platform — canaries, scripts, docs, and test fixtures",
+  "scripts": {
+    "canaries": "tsx canaries/index.ts",
+    "canaries:watch": "tsx canaries/index.ts --watch",
+    "qa:quick": "tsx canaries/index.ts",
+    "qa:sca": "tsx scripts/package-verify.ts",
+    "qa:verify": "tsx scripts/package-verify.ts --dry-run",
+    "qa:cred-setup": "tsx lib/credentials/setup-wizard.ts",
+    "qa:delta": "tsx scripts/qa-delta-report.ts",
+    "qa:evolve-v2": "tsx scripts/qa-evolve-v2.ts",
+    "qa:cleanup": "tsx scripts/qa-cleanup.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.0",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/openai": "^3.0.53",
+    "@ai-sdk/xai": "^3.0.0",
+    "ai": "^6.0.0",
+    "fast-glob": "^3.3.0",
+    "yaml": "^2.7.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "firebase-admin": "^13.7.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

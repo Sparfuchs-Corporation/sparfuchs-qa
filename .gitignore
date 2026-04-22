@@ -26,3 +26,17 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# From sparfuchs-qa-llm
+.env.local
+CLAUDE.local.md
+qa-reports/
+qa-data/
+training-reports/
+architecture-reports/
+
+# PDFs
+*.pdf
+
+# Temporary credential files
+**/sparfuchs-qa-creds-*
