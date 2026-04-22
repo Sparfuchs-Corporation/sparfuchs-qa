@@ -91,7 +91,7 @@ export default async function observabilityCoverage(): Promise<CanaryResult> {
 
   return {
     id: 'observability-coverage',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'code-quality',
     severity,
     hint: `${instrumentedFiles}/${handlerFiles} handler files have structured logging (${coveragePercent}% coverage)`,

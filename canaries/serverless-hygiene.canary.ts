@@ -373,7 +373,7 @@ export default async function serverlessHygiene(): Promise<CanaryResult> {
   if (frameworks.length === 0) {
     return {
       id: 'serverless-hygiene',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'deploy-readiness',
       severity: 'info',
       hint: 'No serverless framework detected (checked: Firebase Functions, AWS SAM, Azure Functions)',
@@ -421,7 +421,7 @@ export default async function serverlessHygiene(): Promise<CanaryResult> {
 
   return {
     id: 'serverless-hygiene',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'deploy-readiness',
     severity: hasCritical ? 'critical' : hasHigh ? 'high' : hasMedium ? 'medium' : allIssues.length > 0 ? 'low' : 'info',
     hint,

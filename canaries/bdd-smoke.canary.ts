@@ -35,7 +35,7 @@ export default async function bddSmoke(): Promise<CanaryResult> {
 
   return {
     id: 'bdd-smoke',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'test-infrastructure',
     severity: configExists ? 'info' : 'medium',
     hint: configExists

@@ -30,7 +30,7 @@ export default async function cicdConfig(): Promise<CanaryResult> {
   if (platforms.length === 0) {
     return {
       id: 'cicd-config',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'build-config',
       severity: 'info',
       hint: 'No CI/CD config files detected (checked: Cloud Build, CodeBuild, Azure Pipelines, GitHub Actions)',
@@ -70,7 +70,7 @@ export default async function cicdConfig(): Promise<CanaryResult> {
 
   return {
     id: 'cicd-config',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'build-config',
     severity: issues.length > 0 ? highestSeverity(issues) : 'info',
     hint,

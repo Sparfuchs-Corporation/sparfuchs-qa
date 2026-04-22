@@ -84,7 +84,7 @@ Focus on:
 Look for patterns suggesting old versions:
 
 - Directories named `old/`, `legacy/`, `deprecated/`, `backup/`, `archive/`
-- Multiple versions of the same app (`the-forge/`, `the-forge-v2/`, `frontend/`, `frontend-old/`)
+- Multiple versions of the same app (`app-v1/`, `app-v2/`, `frontend/`, `frontend-old/`)
 - Directories with no recent git activity (`git log --oneline -1 -- {dir}`)
 - README files that say "deprecated" or "migrated to..."
 

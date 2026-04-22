@@ -90,7 +90,7 @@ This is the critical step. Compare:
 ### 4b. Role Extraction Source
 - **CRITICAL**: Is the role extracted from the JWT/token claims (secure) or from the request body (insecure)?
 - Does the extraction code match the claims structure the auth system sets?
-- Example flaw: Auth system sets `claims.role = "admin"` but middleware reads `claims.roles.theforge.role`
+- Example flaw: Auth system sets `claims.role = "admin"` but middleware reads `claims.roles.myapp.role`
 
 ### 4c. Frontend vs Backend Enforcement
 - For every frontend-guarded route, is there corresponding backend protection?

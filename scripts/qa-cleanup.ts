@@ -2,8 +2,8 @@
  * qa-cleanup — Archive old runs and compact finding index
  *
  * Usage:
- *   npx tsx scripts/qa-cleanup.ts --project the-forge --keep 10
- *   npx tsx scripts/qa-cleanup.ts --project the-forge --older-than 90d
+ *   npx tsx scripts/qa-cleanup.ts --project <your-project-slug> --keep 10
+ *   npx tsx scripts/qa-cleanup.ts --project <your-project-slug> --older-than 90d
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';

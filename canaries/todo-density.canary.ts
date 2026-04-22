@@ -35,7 +35,7 @@ export default async function todoDensity(): Promise<CanaryResult> {
 
   return {
     id: 'todo-density',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'code-quality',
     severity,
     hint: `Found ${count} TODO/FIXME/XXX/HACK comments in apps/ and libs/`,

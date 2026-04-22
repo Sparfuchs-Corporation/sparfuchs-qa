@@ -136,7 +136,7 @@ export default async function auditEventLogging(): Promise<CanaryResult> {
   if (authFiles.length === 0 && adminFiles.length === 0) {
     return {
       id: 'audit-event-logging',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'security',
       severity: 'info',
       hint: 'No auth or admin handler patterns found — audit event check skipped',
@@ -183,7 +183,7 @@ export default async function auditEventLogging(): Promise<CanaryResult> {
 
   return {
     id: 'audit-event-logging',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'security',
     severity,
     hint,

@@ -4,8 +4,8 @@
  * Replaces qa-evolve.ts. Uses local qa-data/ instead of Firestore.
  *
  * Usage:
- *   npx tsx scripts/qa-evolve-v2.ts --project the-forge
- *   QA_EVOLVE_DRY=1 npx tsx scripts/qa-evolve-v2.ts --project the-forge
+ *   npx tsx scripts/qa-evolve-v2.ts --project <your-project-slug>
+ *   QA_EVOLVE_DRY=1 npx tsx scripts/qa-evolve-v2.ts --project <your-project-slug>
  */
 import { readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';

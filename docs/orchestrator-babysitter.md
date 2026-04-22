@@ -5,7 +5,7 @@
 
 ## Context
 
-QA gap analysis on The Forge: 72% of files unexamined, `.claude` directories making reports unusable. Root cause: the orchestrator is a dumb launcher, not a supervisor. This plan fixes the immediate gaps and establishes the foundation for a best-practice multi-AI agentic QA system.
+A QA gap analysis on a large target repository: 72% of files unexamined, `.claude` directories making reports unusable. Root cause: the orchestrator is a dumb launcher, not a supervisor. This plan fixes the immediate gaps and establishes the foundation for a best-practice multi-AI agentic QA system.
 
 **Mandatory principle**: No agent may ever be tied to a single AI provider. Agents are defined by prompt + tool schema only. Provider selection is the orchestrator's job.
 
@@ -701,7 +701,7 @@ Implementation: tiny new script `scripts/sparfuchs-status.ts` (or add a `--statu
 
 ```
 === Sparfuchs QA — Live Dashboard ===
-Run: qa-20260415-1432-a3f1 | Repo: the-forge | Strategy: balanced
+Run: qa-20260415-1432-a3f1 | Repo: sample-project | Strategy: balanced
 Elapsed: 4m 32s | ETA: ~6m remaining
 
 Progress:  ████████████████░░░░░░░░░░░░░░ 12/38 agents (32%)

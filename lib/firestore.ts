@@ -2,7 +2,7 @@ import { initializeApp } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { FieldValue } from 'firebase-admin/firestore';
 
-const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.QA_PROJECT_ID || 'theforge-dev-1771601127';
+const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.QA_PROJECT_ID || '<your-gcp-project>';
 const app = initializeApp({ projectId }, 'qa-platform');
 export const db = getFirestore(app);
 export { FieldValue };

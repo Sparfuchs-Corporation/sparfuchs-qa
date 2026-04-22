@@ -37,7 +37,7 @@ export default async function hardcodedCredential(): Promise<CanaryResult> {
 
   return {
     id: 'hardcoded-credential',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'security',
     severity: count > 0 ? 'critical' : 'info',
     hint:

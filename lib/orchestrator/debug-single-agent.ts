@@ -13,7 +13,7 @@ import { mkdirSync } from 'node:fs';
 import type { ToolCallLogEntry } from './types.js';
 
 const agentName = process.argv[2] ?? 'dependency-auditor';
-const repoPath = process.argv[3] ?? '/Users/bob/Development-local/clone-Theforge-merge-prep';
+const repoPath = process.argv[3] ?? process.env.QA_DEBUG_REPO ?? '<set QA_DEBUG_REPO or pass absolute path as argv[3]>';
 
 async function main() {
   console.log(`\n=== Debug Single Agent: ${agentName} ===`);

@@ -52,7 +52,7 @@ export default async function coverageHole(): Promise<CanaryResult> {
 
   return {
     id: 'coverage-hole',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'test-coverage',
     severity,
     hint: coverageExists

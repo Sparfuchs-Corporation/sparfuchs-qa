@@ -54,7 +54,7 @@ export default async function performanceRegression(): Promise<CanaryResult> {
 
   return {
     id: 'performance-regression',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'performance',
     severity,
     hint: distExists

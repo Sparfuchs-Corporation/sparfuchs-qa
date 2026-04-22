@@ -218,7 +218,7 @@ export default async function logTierConfig(): Promise<CanaryResult> {
   if (!hasAppCode) {
     return {
       id: 'log-tier-config',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'configuration',
       severity: 'info',
       hint: 'No application code found — log tier check skipped',
@@ -278,7 +278,7 @@ export default async function logTierConfig(): Promise<CanaryResult> {
 
   return {
     id: 'log-tier-config',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'configuration',
     severity,
     hint,

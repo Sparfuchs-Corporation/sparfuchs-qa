@@ -36,7 +36,7 @@ export default async function i18nMissingKey(): Promise<CanaryResult> {
 
   return {
     id: 'i18n-missing-key',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'i18n',
     severity: 'info',
     hint: `Found ~${count} hardcoded user-visible strings in TSX pages (placeholder for future i18n adoption)`,

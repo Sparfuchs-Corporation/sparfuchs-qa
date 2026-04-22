@@ -298,7 +298,7 @@ export default async function dockerPrerequisites(): Promise<CanaryResult> {
   if (dockerfiles.length === 0 && platforms.length === 0) {
     return {
       id: 'docker-prerequisites',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'build-config',
       severity: 'info',
       hint: 'No Dockerfiles or CI/CD configs found — Docker checks skipped',
@@ -350,7 +350,7 @@ export default async function dockerPrerequisites(): Promise<CanaryResult> {
 
   return {
     id: 'docker-prerequisites',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'build-config',
     severity: hasCritical ? 'critical' : hasHigh ? 'high' : allIssues.length > 0 ? 'medium' : 'info',
     hint,

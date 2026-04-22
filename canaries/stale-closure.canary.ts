@@ -35,7 +35,7 @@ export default async function staleClosure(): Promise<CanaryResult> {
 
   return {
     id: 'stale-closure',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'react-hooks',
     severity: count > 0 ? 'medium' : 'info',
     hint:

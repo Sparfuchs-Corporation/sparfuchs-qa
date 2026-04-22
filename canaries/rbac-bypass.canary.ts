@@ -24,7 +24,7 @@ export default async function rbacBypass(): Promise<CanaryResult> {
   if (!fs.existsSync(routerPath)) {
     return {
       id: 'rbac-bypass',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'security',
       severity: 'info',
       hint: 'router.tsx not found — cannot scan for unprotected routes',
@@ -73,7 +73,7 @@ export default async function rbacBypass(): Promise<CanaryResult> {
 
   return {
     id: 'rbac-bypass',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'security',
     severity: unprotectedCount > 0 ? 'medium' : 'info',
     hint,

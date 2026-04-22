@@ -51,7 +51,7 @@ export default async function environmentParity(): Promise<CanaryResult> {
 
   return {
     id: 'environment-parity',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'configuration',
     severity,
     hint,

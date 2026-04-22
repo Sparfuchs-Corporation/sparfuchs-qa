@@ -68,16 +68,16 @@ is the mandatory gate between AI-generated drafts and CI execution.
 
 | Component | Project | Runtime |
 |-----------|---------|---------|
-| QA Cloud Functions | `theforge-dev-1771601127` | Cloud Functions v2 (Node 20) |
-| QA Firestore | `theforge-dev-1771601127` | Firestore (qa_* collections) |
-| GCS Test Bucket | `theforge-dev-1771601127` | `gs://qa-platform-tests` |
+| QA Cloud Functions | `<your-gcp-project>` | Cloud Functions v2 (Node 20) |
+| QA Firestore | `<your-gcp-project>` | Firestore (qa_* collections) |
+| GCS Test Bucket | `<your-gcp-project>` | `gs://qa-platform-tests` |
 | Anvil QA Dashboard | Anvil repo | React MFE in Anvil shell |
 | Canary Runner | In-repo | `npx tsx` (local + Cloud Build) |
 | AI Baseline Checker | QA Cloud Function | Scheduled (daily) |
 
 The QA Platform shares the dev GCP project but uses isolated Firestore
 collections (prefixed `qa_`) and a dedicated GCS bucket. No QA data
-touches the main Forge Firestore collections.
+touches the main application Firestore collections.
 
 ---
 
@@ -327,4 +327,4 @@ hard gate. Layers 5-7 provide ongoing safety after activation.
 
 - [QA-ONBOARDING.md](./QA-ONBOARDING.md) — quick-start guide
 - [TESTING-GUIDE.md](./TESTING-GUIDE.md) — detailed test reference
-- [security_architecture.md](./security_architecture.md) — Forge security model
+- [security_architecture.md](./security_architecture.md) — target app security model

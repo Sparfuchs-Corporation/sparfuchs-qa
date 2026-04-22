@@ -26,7 +26,7 @@ export default async function aiDecay(): Promise<CanaryResult> {
 
   return {
     id: 'ai-decay',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'ai-quality',
     severity: 'info',
     hint: baselineExists

@@ -164,7 +164,7 @@ export default async function secretReferences(): Promise<CanaryResult> {
   if (platforms.length === 0) {
     return {
       id: 'secret-references',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'deploy-readiness',
       severity: 'info',
       hint: 'No CI/CD platforms detected — secret cross-referencing skipped',
@@ -246,7 +246,7 @@ export default async function secretReferences(): Promise<CanaryResult> {
 
   return {
     id: 'secret-references',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'deploy-readiness',
     severity,
     hint,

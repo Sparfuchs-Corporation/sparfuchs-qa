@@ -69,7 +69,7 @@ export default async function typescriptStrict(): Promise<CanaryResult> {
   if (!hasTsconfig) {
     return {
       id: 'typescript-strict',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'build',
       severity: 'info',
       hint: 'No tsconfig.json found at project root — skipping TypeScript check',
@@ -87,7 +87,7 @@ export default async function typescriptStrict(): Promise<CanaryResult> {
   if (!hasNodeModules) {
     return {
       id: 'typescript-strict',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'build',
       severity: 'medium',
       hint: 'node_modules not found — run npm install before checking TypeScript',
@@ -140,7 +140,7 @@ export default async function typescriptStrict(): Promise<CanaryResult> {
 
   return {
     id: 'typescript-strict',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'build',
     severity: totalErrors > 0 ? 'critical' : timedOut ? 'medium' : 'info',
     hint,

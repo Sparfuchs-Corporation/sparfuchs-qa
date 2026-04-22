@@ -36,7 +36,7 @@ export default async function mockDataLeak(): Promise<CanaryResult> {
 
   return {
     id: 'mock-data-leak',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'data-integrity',
     severity: count > 0 ? 'critical' : 'info',
     hint:

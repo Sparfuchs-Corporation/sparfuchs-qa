@@ -205,7 +205,7 @@ export default async function namingBoundaryMismatch(): Promise<CanaryResult> {
   if (snakeKeys.size === 0 && camelKeys.size === 0) {
     return {
       id: 'naming-boundary-mismatch',
-      projectId: 'the-forge',
+      projectId: 'sample-project',
       type: 'contract-drift',
       severity: 'info',
       hint: 'No cross-language boundary detected (no Python+JS/TS key access patterns found)',
@@ -236,7 +236,7 @@ export default async function namingBoundaryMismatch(): Promise<CanaryResult> {
 
   return {
     id: 'naming-boundary-mismatch',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'contract-drift',
     severity,
     hint,

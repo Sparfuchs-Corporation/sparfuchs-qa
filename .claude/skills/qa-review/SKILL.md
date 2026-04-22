@@ -38,7 +38,7 @@ Before any analysis, gather project metadata. Check if the user's prompt already
 
 Gather these four values:
 
-- **Project Name** — display name for reports (e.g., "Sparfuchs", "The Forge"). If not pre-filled, default to the repo directory name.
+- **Project Name** — display name for reports (e.g., "Acme Web App"). If not pre-filled, default to the repo directory name.
 - **Repo Location** — absolute path to the target repository root (default: current working directory)
 - **Web URL** — GitHub/GitLab URL for the project (or "none")
 - **Person Name** — who is initiating this QA review

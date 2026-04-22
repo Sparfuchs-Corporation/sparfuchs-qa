@@ -47,7 +47,7 @@ export default async function silentErrorSwallow(): Promise<CanaryResult> {
 
   return {
     id: 'silent-error-swallow',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'error-handling',
     severity,
     hint: `Found ${count} empty catch blocks in apps/ and libs/`,

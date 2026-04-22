@@ -6,9 +6,9 @@
  *   generateDeltaReport({ projectSlug, runId, outPath: join(runDir, 'delta-report.md') });
  *
  * CLI usage:
- *   npx tsx scripts/qa-delta-report.ts --project the-forge
- *   npx tsx scripts/qa-delta-report.ts --project the-forge --run qa-20260404-0800-ab12
- *   npx tsx scripts/qa-delta-report.ts --project the-forge --output delta.md
+ *   npx tsx scripts/qa-delta-report.ts --project <your-project-slug>
+ *   npx tsx scripts/qa-delta-report.ts --project <your-project-slug> --run qa-20260404-0800-ab12
+ *   npx tsx scripts/qa-delta-report.ts --project <your-project-slug> --output delta.md
  */
 import { readFileSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';

@@ -50,7 +50,7 @@ export default async function qaSelfAudit(): Promise<CanaryResult> {
 
   return {
     id: 'qa-self-audit',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'meta',
     severity: 'info',
     hint: passed

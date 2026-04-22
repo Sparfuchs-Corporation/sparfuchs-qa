@@ -249,7 +249,7 @@ export default async function iamConditionScope(): Promise<CanaryResult> {
     if (!hasTf && !hasIamJson) {
       return {
         id: 'iam-condition-scope',
-        projectId: 'the-forge',
+        projectId: 'sample-project',
         type: 'security',
         severity: 'info',
         hint: 'No Terraform or IAM policy files found — IAM condition check skipped',
@@ -286,7 +286,7 @@ export default async function iamConditionScope(): Promise<CanaryResult> {
 
   return {
     id: 'iam-condition-scope',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'security',
     severity,
     hint,

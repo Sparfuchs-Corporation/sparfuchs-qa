@@ -35,7 +35,7 @@ export default async function consoleErrorLeak(): Promise<CanaryResult> {
 
   return {
     id: 'console-error-leak',
-    projectId: 'the-forge',
+    projectId: 'sample-project',
     type: 'logging',
     severity: 'info',
     hint:

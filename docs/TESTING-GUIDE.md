@@ -131,7 +131,7 @@ considered stable.
 
 ## Sparfuchs QA Canaries
 
-The sparfuchs-qa repo includes 15 canaries under `canaries/` that check code quality of any target repository. These are distinct from The Forge canaries above.
+The sparfuchs-qa repo includes 15 canaries under `canaries/` that check code quality of any target repository. These are distinct from the platform canaries described above.
 
 | # | Canary | Type | What It Checks |
 |---|--------|------|----------------|
@@ -219,7 +219,7 @@ Baseline categories:
 
 ### Canary conventions
 
-**Forge canaries** (in `tests/platform/canaries/`):
+**Platform canaries** (in `tests/platform/canaries/`):
 - One file per canary: `tests/platform/canaries/<name>.canary.ts`
 - Export a default async function returning `{ pass: boolean; detail?: string }`
 - Keep execution under 500ms — canaries must be fast
