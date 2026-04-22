@@ -6,7 +6,7 @@
 |----|-------------|--------|-------|
 | FR-01 | Run all QA canaries from a single command entrypoint. | ✅ Done | Implemented via `canaries/index.ts`, npm scripts, and `make qa-quick`. |
 | FR-02 | Run remote QA reviews against arbitrary git repositories with optional full, auth, docs, training, and selective-agent modes. | ✅ Done | Implemented through `scripts/qa-review-remote.sh` and related Make targets. |
-| FR-03 | Support report, delta, cleanup, sync, and evolution workflows from the local toolkit. | ✅ Done | Covered by `scripts/qa-report-adapter.ts`, `qa-delta-report.ts`, `qa-cleanup.ts`, `qa-firestore-sync.ts`, and evolve scripts. |
+| FR-03 | Support report, delta, cleanup, and evolution workflows from the local toolkit. | ✅ Done | Covered by `scripts/qa-delta-report.ts`, `qa-markdown-reports.ts`, `qa-cleanup.ts`, and `qa-evolve-v2.ts`. External report push / Firestore sync has been removed; all artifacts are local. |
 | FR-04 | Support credential-aware testing profiles for authenticated review runs. | ✅ Done | Implemented under `lib/credentials/` and Make helpers. |
 | FR-05 | Provide a safe repository bootstrap script for local setup. | ✅ Done | `setup-qa-complete.sh` now validates repo state, fixes hook permissions, and optionally runs `npm ci`. |
 | FR-06 | Provide a safe uninstaller for local/generated artifacts. | ✅ Done | Added `uninstall-qa-complete.sh` during this session. |

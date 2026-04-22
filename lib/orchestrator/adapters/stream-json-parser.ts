@@ -91,6 +91,13 @@ export function parseStreamJson(rawOutput: string): StreamJsonParseResult {
   const toolCallLog: ToolCallLogEntry[] = [];
   let usage = { inputTokens: 0, outputTokens: 0 };
   let model: string | null = null;
+  // The terminal `result` event carries the canonical final text. Prefer it
+  // over content_block_delta fragments when both are present — Gemini CLI
+  // fragments its text stream in ways that sometimes split finding tags
+  // (e.g. `<!-- finding: {...} -->`) across delta boundaries. Using the
+  // authoritative final text avoids lost/truncated tags reaching the
+  // downstream parser.
+  let finalResultText: string | null = null;
 
   // State for incremental tool_use block assembly
   let pendingToolName: string | null = null;
@@ -189,11 +196,7 @@ export function parseStreamJson(rawOutput: string): StreamJsonParseResult {
       case 'result': {
         const resultEvent = event as ResultEvent;
         if (resultEvent.result && typeof resultEvent.result === 'string') {
-          // Result text is the final assembled output — use it if we haven't
-          // collected text from content blocks
-          if (textParts.length === 0) {
-            textParts.push(resultEvent.result);
-          }
+          finalResultText = resultEvent.result;
         }
         if (resultEvent.model) model = resultEvent.model;
         if (resultEvent.usage) {
@@ -204,8 +207,17 @@ export function parseStreamJson(rawOutput: string): StreamJsonParseResult {
     }
   }
 
+  // Prefer the authoritative final result text when it is present AND at
+  // least as long as the delta-assembled text. Falling back to the longer of
+  // the two means finding-tag fragments never go missing even if a stream
+  // emits both sources with slight divergence.
+  const assembled = textParts.join('');
+  const text = finalResultText && finalResultText.length >= assembled.length
+    ? finalResultText
+    : assembled || finalResultText || '';
+
   return {
-    text: textParts.join(''),
+    text,
     toolCallLog,
     usage,
     model,

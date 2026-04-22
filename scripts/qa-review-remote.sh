@@ -105,6 +105,7 @@ COMPOSE_RULES=""
 AUTO_COMPLETE=""
 BASELINE=""
 COVERAGE=""
+ACCEPT_NO_GIT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -129,6 +130,7 @@ while [[ $# -gt 0 ]]; do
     --baseline)      BASELINE="1"; shift ;;
     --coverage)      COVERAGE="$2"; shift 2 ;;
     --concurrency)   CONCURRENCY="$2"; shift 2 ;;
+    --accept-no-git) ACCEPT_NO_GIT="1"; shift ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -168,9 +170,34 @@ fi
 
 REPO="$(cd "$REPO" && pwd)"  # resolve to absolute path
 
+IS_GIT_REPO="1"
 if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-  echo "Error: $REPO is not a git repository" >&2
-  exit 1
+  IS_GIT_REPO=""
+  echo "" >&2
+  echo "WARNING: $REPO is not a git repository." >&2
+  echo "  There is no VCS backup for this run. The QA run may write files" >&2
+  echo "  (agents create session logs, reports, and JSON artifacts), and" >&2
+  echo "  a revert via 'git checkout' is not possible." >&2
+  echo "" >&2
+  if [[ -n "$ACCEPT_NO_GIT" ]]; then
+    echo "  --accept-no-git was passed; continuing without a repo backup." >&2
+    echo "" >&2
+  elif [[ -t 0 && -z "$NO_INTERACTIVE" ]]; then
+    read -rp "Continue anyway? [y/N] " git_ack
+    case "$git_ack" in
+      y|Y|yes|YES)
+        echo "Acknowledged. Continuing without VCS backup." >&2
+        ;;
+      *)
+        echo "Aborted. Run from a git-backed target, or pass --accept-no-git." >&2
+        exit 1
+        ;;
+    esac
+  else
+    echo "Error: non-interactive session and --accept-no-git was not passed." >&2
+    echo "       Pass --accept-no-git to proceed against a non-git target." >&2
+    exit 1
+  fi
 fi
 
 # --- Detect installed AI CLIs ---
@@ -187,8 +214,18 @@ for cli_name in claude gemini codex openclaw aider; do
   fi
 done
 
-# --- Interactive engine selection ---
-if [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 0 ]]; then
+# --- Engine / provider selection ---
+# If --provider was passed on the command line, skip the interactive menu and
+# lock in the orchestrated engine with the specified provider. The selection
+# is still shown so the user sees what was taken.
+if [[ -n "${PROVIDER:-}" ]]; then
+  ENGINE="orchestrated"
+  echo ""
+  echo "Provider: $PROVIDER (from --provider; engine menu skipped)"
+  if [[ ${#DETECTED_CLI_NAMES[@]} -gt 0 ]]; then
+    echo "Detected CLIs: ${DETECTED_CLIS}"
+  fi
+elif [[ -z "${ENGINE:-}" && -z "$NO_INTERACTIVE" && ${#DETECTED_CLI_NAMES[@]} -gt 0 ]]; then
   echo ""
   echo "Select engine:"
 
@@ -322,7 +359,7 @@ if [[ -n "$CRED_PROFILE" ]]; then
   echo "Loading credentials from keychain profile: $CRED_PROFILE"
 elif [[ -n "$AUTH" ]]; then
   echo "Running credential setup wizard..."
-  CRED_RESULT=$(npx tsx "$SPARFUCHS_ROOT/lib/credentials/setup-wizard.ts" --run-id="$RUN_ID")
+  CRED_RESULT=$("$SPARFUCHS_ROOT/node_modules/.bin/tsx" "$SPARFUCHS_ROOT/lib/credentials/setup-wizard.ts" --run-id="$RUN_ID")
 
   if [[ "$CRED_RESULT" == keychain:* ]]; then
     # Credentials loaded from OS keychain profile
@@ -348,7 +385,7 @@ cleanup() {
 
   # Delete temporary credential file (skip if credentials came from keychain)
   if [[ -n "$CRED_FILE" && -f "$CRED_FILE" && -z "$CRED_PROFILE" ]]; then
-    npx tsx "$SPARFUCHS_ROOT/lib/credentials/teardown.ts" "$CRED_FILE" 2>/dev/null \
+    "$SPARFUCHS_ROOT/node_modules/.bin/tsx" "$SPARFUCHS_ROOT/lib/credentials/teardown.ts" "$CRED_FILE" 2>/dev/null \
       || rm -f "$CRED_FILE"
   fi
 
@@ -581,7 +618,8 @@ else
   [[ -n "$COVERAGE" ]] && ORCH_ARGS+=(--coverage "$COVERAGE")
   [[ -n "$PROVIDER" ]] && ORCH_ARGS+=(--provider "$PROVIDER")
   [[ -n "${CONCURRENCY:-}" ]] && ORCH_ARGS+=(--concurrency "$CONCURRENCY")
+  [[ -z "$IS_GIT_REPO" ]] && ORCH_ARGS+=(--no-git)
   SPARFUCHS_CRED_FILE="${CRED_FILE:-}" \
   SPARFUCHS_CRED_PROFILE="${CRED_PROFILE:-}" \
-  npx tsx "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" "${ORCH_ARGS[@]}"
+  "$SPARFUCHS_ROOT/node_modules/.bin/tsx" "$SPARFUCHS_ROOT/scripts/qa-review-orchestrated.ts" "${ORCH_ARGS[@]}"
 fi

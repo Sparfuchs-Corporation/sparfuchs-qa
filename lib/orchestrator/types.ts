@@ -234,6 +234,11 @@ export interface OrchestrationConfig {
   concurrency?: number;
   interAgentCooldownMs?: number;
   sourceFiles?: ReadonlySet<string>;
+  /** True when the target repoPath is a git working tree. When false, the
+   * wrapper script (or the caller) accepted running against a non-VCS target.
+   * Recorded in meta.json so downstream consumers know the run had no VCS
+   * backing. */
+  isGitRepo?: boolean;
 }
 
 // --- Credential Store ---

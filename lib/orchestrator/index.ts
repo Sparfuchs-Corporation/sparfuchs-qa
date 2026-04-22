@@ -1,7 +1,11 @@
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import * as readline from 'node:readline';
-import type { OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk } from './types.js';
+import type {
+  OrchestrationConfig, ProviderName, AgentDefinition, ChunkPlan, FileChunk,
+  TestabilityReport, CoverageStrategyConfig, ModelsYaml,
+} from './types.js';
+import type { QaFinding } from '../types.js';
 import { isApiProvider } from './types.js';
 import { loadModelsConfig, enforceDataClassification, resolveProviderKeys, resolveModelForAgent, resolveProviderConstraint } from './config.js';
 import { parseAgentsByNames, parsePhase1Agents, parseAllAgents, validateAgentIntegrity } from './agent-parser.js';
@@ -10,7 +14,15 @@ import { RunState } from './run-state.js';
 import { TtyRenderer } from './renderers/tty-renderer.js';
 import { DashboardController } from './dashboard-controller.js';
 import { QualityAuditor } from './quality-auditor.js';
-import { parseFindingTags, parseAgentDataTags, appendFinding, writeAgentOutputEnvelope } from '../../scripts/qa-findings-manager.js';
+import {
+  parseFindingTags, parseAgentDataTags, appendFinding, writeAgentOutputEnvelope,
+  finalizeFindingsFromJsonl, computeDelta, writeDelta, updateFindingIndex, loadBaseline,
+  readAgentFindingsFile, AgentIngestionError,
+} from '../../scripts/qa-findings-manager.js';
+import { generateDeltaReport } from '../../scripts/qa-delta-report.js';
+import {
+  generateQaReport, generateRemediationPlan, generateObservabilityGaps, generateQaGaps,
+} from '../../scripts/qa-markdown-reports.js';
 import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
 import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
 import {
@@ -80,7 +92,9 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   if (apiProviders.length > 0) {
     process.stderr.write('\n--- Auth Proxy ---\n');
     try {
-      const proxyProviders = await registry.startProxy();
+      const proxyProviders = await withOrchestratorTimeout(
+        registry.startProxy(), 15_000, 'registry.startProxy',
+      );
       process.stderr.write(`  Proxy: listening (session-secured, Unix socket)\n`);
       process.stderr.write(`  Keys:  ${proxyProviders.map(p => `${p} (keychain)`).join(', ')}\n`);
 
@@ -99,7 +113,9 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       }
 
       process.stderr.write('\n--- Provider Validation ---\n');
-      const results = await registry.validateAll(validationEntries);
+      const results = await withOrchestratorTimeout(
+        registry.validateAll(validationEntries), 45_000, 'registry.validateAll',
+      );
       for (const r of results) {
         if (r.status === 'ok') {
           process.stderr.write(`  \u2713 ${r.provider}/${r.tier}: ${r.model} responded (${r.latencyMs}ms)\n`);
@@ -159,11 +175,40 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const runDir = join(config.qaDataRoot, config.projectSlug, 'runs', config.runId);
   mkdirSync(runDir, { recursive: true });
   mkdirSync(join(config.qaDataRoot, config.projectSlug, 'findings'), { recursive: true });
+  // Per-agent JSON artifact directories — agents write their findings and
+  // handoff data to <runDir>/findings/<agent>.json and
+  // <runDir>/agent-data/<agent>.output.json
+  mkdirSync(join(runDir, 'findings'), { recursive: true });
+  mkdirSync(join(runDir, 'agent-data'), { recursive: true });
   const findingsPath = join(runDir, 'findings.jsonl');
   writeFileSync(findingsPath, '');
+  const metaPath = join(runDir, 'meta.json');
+
+  // Pre-seed meta.json so the run directory always has a readable stub.
+  // Overwritten by the finalizer with status "succeeded" / "partial" / "errored".
+  writePreSeedMeta(metaPath, config);
+
+  // Bag of state populated as the run progresses. The finalizer reads whatever
+  // is available so partial failures still produce a final report.
+  const bag: FinalizerBag = {
+    runDir,
+    findingsPath,
+    metaPath,
+    sessionLogDir: config.sessionLogDir,
+    config,
+    modelsConfig,
+    available,
+    disabled,
+    apiAvail: [],
+    cliAvail: [],
+  };
+
+  let caughtError: unknown;
+  try {
 
   // 5.5. Testability pre-flight scan
   const testabilityReport = await scanTestability(config.repoPath, config.moduleScope);
+  bag.testabilityReport = testabilityReport;
   writeTestabilityReport(testabilityReport, runDir);
   printTestabilitySummary(testabilityReport);
 
@@ -180,6 +225,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       .filter(p => !p.effective)
       .map(p => p.agentName),
   );
+  bag.agentsToSkip = agentsToSkip;
 
   const excludedFileSet = new Set([
     ...testabilityReport.uncheckable.minifiedFiles,
@@ -191,12 +237,17 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   // 6. Large codebase chunking + coverage strategy
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
   config.sourceFiles = new Set(allSourceFiles);
+  bag.allSourceFiles = allSourceFiles;
   const strategy: CoverageStrategy = config.coverageStrategy
     ?? modelsConfig.coverageStrategy
     ?? 'balanced';
+  bag.strategy = strategy;
   const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet], strategy);
+  bag.chunkPlan = chunkPlan;
   const strategyConfig = getStrategyConfig(strategy);
+  bag.strategyConfig = strategyConfig;
   const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig);
+  bag.babysitter = babysitter;
 
   // 6.1. Observability-level check for babysitting
   // Find the best observability level across all available providers.
@@ -230,6 +281,28 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     const primaryAdapter = getAdapter(primaryProvider);
     if (primaryAdapter.type === 'cli') {
       printCapabilityReport(primaryProvider, agents, config);
+
+      // Pre-flight auth check — fail fast with setup instructions when the
+      // selected CLI cannot run non-interactively. This replaces the old
+      // failure mode where every agent exited 0 after hitting an interactive
+      // auth prompt, producing 80 fake "successes" and no findings.
+      if (typeof primaryAdapter.checkAuth === 'function') {
+        const auth = primaryAdapter.checkAuth();
+        if (!auth.authenticated) {
+          process.stderr.write(
+            `\n=== ${primaryProvider}: authentication required ===\n` +
+            `${auth.suggestion ?? 'Adapter reported no credentials; see provider docs.'}\n` +
+            `===\n\n`,
+          );
+          throw new Error(
+            `${primaryProvider} is not authenticated for non-interactive use. ` +
+            `See instructions above, then re-run.`,
+          );
+        }
+        process.stderr.write(
+          `Auth: ${primaryProvider} ready (${auth.method ?? 'unspecified'})\n`,
+        );
+      }
 
       // Collect CLI-incompatible agents for skip
       for (const agent of agents) {
@@ -280,6 +353,8 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   // 8. Print run header
   const apiAvail = available.filter(p => isApiProvider(config.modelsConfig.providers[p]));
   const cliAvail = available.filter(p => !isApiProvider(config.modelsConfig.providers[p]));
+  bag.apiAvail = apiAvail;
+  bag.cliAvail = cliAvail;
 
   process.stderr.write('\n=== Sparfuchs QA Review (orchestrated engine) ===\n');
   if (apiAvail.length > 0) {
@@ -325,9 +400,17 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     }
   }
 
-  // Smart scheduling: light unchunked first, then mid, then heavy/chunked
+  // Scheduling: primary key is stage (upstream-data dependencies between
+  // agents), secondary is unchunked-before-chunked, tertiary is tier.
+  // Stage-gated dispatch (below) means a stage-N+1 job never starts until
+  // every stage-≤N job has reached a terminal status. This prevents the
+  // deadlock where e.g. release-gate-synthesizer (stage 4) claims a
+  // concurrency slot while still waiting on test-runner (stage 3) output.
   const TIER_PRIORITY: Record<string, number> = { light: 0, mid: 1, heavy: 2 };
   jobs.sort((a, b) => {
+    const stageA = getAgentStage(a.agent.name);
+    const stageB = getAgentStage(b.agent.name);
+    if (stageA !== stageB) return stageA - stageB;
     const chunkA = a.chunk ? 1 : 0;
     const chunkB = b.chunk ? 1 : 0;
     if (chunkA !== chunkB) return chunkA - chunkB;
@@ -336,8 +419,11 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
 
   // Initialize dashboard (RunState + TtyRenderer + Controller)
   const runState = new RunState();
+  bag.runState = runState;
   const ttyRenderer = new TtyRenderer();
+  bag.ttyRenderer = ttyRenderer;
   const dashboard = new DashboardController(runState, ttyRenderer);
+  bag.dashboard = dashboard;
   runState.setRunId(config.runId);
   runState.setBudget(budget);
   runState.setBabysitter(babysitter);
@@ -370,6 +456,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   dashboard.start();
 
   const auditor = new QualityAuditor(config, modelsConfig, registry);
+  bag.auditor = auditor;
 
   // Wire proxy telemetry into RunState for live dashboard token tracking
   registry.onTelemetry((event) => {
@@ -434,8 +521,12 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     }
   }, 500);
 
-  // Execute jobs with concurrency
-  const tasks = jobs.map(({ agent, chunk, label: agentLabel }) => limit(async () => {
+  // Execute jobs stage-by-stage, each stage bounded by the concurrency
+  // limiter. Stage-gated dispatch means a stage-N+1 agent never acquires a
+  // limiter slot while any stage-≤N agent is still outstanding, preventing
+  // the deadlock where late-stage aggregators (qa-gap-analyzer,
+  // release-gate-synthesizer) block slots that their upstream agents need.
+  const dispatchJob = ({ agent, chunk, label: agentLabel }: AgentJob) => limit(async () => {
     // Check stop conditions before starting
     if (budgetExceeded || dashboard.isQuitRequested()) return;
 
@@ -514,13 +605,42 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         status.coveragePercent = chunkEval.coveragePercent;
       }
 
-      const findings = parseFindingTags(result.text, agent.name);
+      // Prefer the canonical JSON file contract: findings/<agent>.json.
+      // Fall back to legacy <!-- finding: {...} --> tags when the agent has
+      // not migrated. Malformed JSON throws AgentIngestionError — caught below
+      // and recorded against the agent status so it surfaces in the report.
+      let findings: QaFinding[];
+      const findingsJsonPath = join(runDir, 'findings', `${agent.name}.json`);
+      if (existsSync(findingsJsonPath)) {
+        findings = readAgentFindingsFile(runDir, agent.name, config.runId);
+      } else {
+        findings = parseFindingTags(result.text, agent.name, config.runId);
+      }
       for (const finding of findings) {
         appendFinding(config.projectSlug, config.runId, finding);
       }
 
-      // Write agent output envelope (inter-agent data exchange)
-      const agentData = parseAgentDataTags(result.text);
+      // Write agent output envelope (inter-agent data exchange summary).
+      // Handoff data: prefer agent-data/<agent>.output.json, fall back to tags.
+      let agentData: Record<string, unknown>;
+      const agentDataJsonPath = join(runDir, 'agent-data', `${agent.name}.output.json`);
+      if (existsSync(agentDataJsonPath)) {
+        try {
+          const raw = readFileSync(agentDataJsonPath, 'utf-8');
+          const parsed = JSON.parse(raw);
+          if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error(`expected object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`);
+          }
+          agentData = parsed as Record<string, unknown>;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new AgentIngestionError(
+            agent.name, config.runId, 'agent-data-json', msg,
+          );
+        }
+      } else {
+        agentData = parseAgentDataTags(result.text, agent.name, config.runId);
+      }
       writeAgentOutputEnvelope(runDir, agent.name, config.runId, 'complete', agentData, findings);
 
       status.status = 'complete';
@@ -549,6 +669,12 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       if (status.startedAt) {
         status.durationMs = Date.now() - new Date(status.startedAt).getTime();
       }
+      // Surface the real failure reason immediately — don't make the operator
+      // wait for meta.json finalization to find out why an agent died. The
+      // dashboard only shows "FAILED" without the message.
+      process.stderr.write(
+        `\n[AGENT FAILED] ${agentLabel} — ${msg.slice(0, 500)}\n`,
+      );
     }
 
     // Inter-agent cooldown — prevents rate limit hammering in sequential mode
@@ -558,97 +684,76 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         : null;
       await interruptibleSleep(cooldownMs, abortController.signal);
     }
-  }));
+  });
 
-  await Promise.allSettled(tasks);
-  clearInterval(checkQuit);
-  dashboard.teardown();
-
-  // 8.5. Shut down auth proxy
-  await registry.shutdown();
-
-  // 8.6. Post-run finding deduplication
-  const dedupResult = deduplicateFindings(findingsPath, runDir);
-  if (dedupResult.removed > 0) {
-    process.stderr.write(
-      `\nDedup: ${dedupResult.original} -> ${dedupResult.deduplicated} findings ` +
-      `(${dedupResult.removed} cross-agent duplicates merged)\n`,
-    );
+  // Partition jobs into two waves:
+  //   Wave A — all independent reviewers (stages 0-3). No agent in this wave
+  //            reads another agent's output, so they all run concurrently,
+  //            bounded only by the concurrency limiter. One stuck agent does
+  //            not block any other.
+  //   Wave B — synthesis-only agents (stage 4+: qa-gap-analyzer,
+  //            release-gate-synthesizer). These genuinely read every prior
+  //            agent's findings / session-log output, so they wait for Wave A
+  //            to drain before dispatching. This is the deadlock-prevention
+  //            guarantee: synthesis agents NEVER claim a limiter slot while
+  //            any independent reviewer is still queued or running.
+  const SYNTHESIS_STAGE_THRESHOLD = 4;
+  const waveA: AgentJob[] = [];
+  const waveB: AgentJob[] = [];
+  for (const job of jobs) {
+    (getAgentStage(job.agent.name) >= SYNTHESIS_STAGE_THRESHOLD ? waveB : waveA).push(job);
   }
 
-  // 8.6. Coverage report
-  babysitter.printReport();
-  babysitter.writeReport(runDir);
+  if (waveA.length > 0) {
+    process.stderr.write(
+      `\n--- Wave A (reviewers): dispatching ${waveA.length} job(s) concurrently ---\n`,
+    );
+    await Promise.allSettled(waveA.map(dispatchJob));
+  }
 
-  // 9. Write quality audit results
-  const auditPath = join(runDir, 'quality-audit.json');
-  auditor.writeResults(auditPath);
+  if (waveB.length > 0 && !budgetExceeded && !dashboard.isQuitRequested()) {
+    process.stderr.write(
+      `\n--- Wave B (synthesis): dispatching ${waveB.length} job(s) after reviewers drained ---\n`,
+    );
+    await Promise.allSettled(waveB.map(dispatchJob));
+  }
+  clearInterval(checkQuit);
 
-  // 10. Write run meta
-  const metaPath = join(runDir, 'meta.json');
-  writeFileSync(metaPath, JSON.stringify({
-    runId: config.runId,
-    projectSlug: config.projectSlug,
-    engine: 'orchestrated',
-    mode: config.mode,
-    repoPath: config.repoPath,
-    moduleScope: config.moduleScope ?? null,
-    startedAt: new Date().toISOString(),
-    dataClassification: modelsConfig.dataClassification,
-    providers: { api: apiAvail, cli: cliAvail, disabled },
-    testability: {
-      checkabilityScore: testabilityReport.uncheckable.checkabilityScore,
-      totalSourceFiles: testabilityReport.repoProfile.totalSourceFiles,
-      skippedAgents: [...agentsToSkip],
-      recommendations: testabilityReport.recommendations.filter(r => r.priority === 'critical' || r.priority === 'high'),
-    },
-    chunking: chunkPlan ? {
-      totalFiles: chunkPlan.totalFiles,
-      checkableFiles: chunkPlan.checkableFiles,
-      chunks: chunkPlan.chunks.length,
-      excludedFiles: chunkPlan.excludedFiles.length,
-    } : null,
-    coverage: {
-      strategy,
-      targetPercent: strategyConfig.targetCoveragePercent,
-      actualPercent: babysitter.getCoveragePercent(),
-      filesExamined: babysitter.getFilesExamined().size,
-      filesTotal: allSourceFiles.length,
-      retriesExecuted: babysitter.getRetriesExecuted(),
-    },
-    agents: runState.getAgents(),
-    fallbackEvents: runState.getFallbackEvents(),
-    qualityAudit: auditor.getResults(),
-  }, null, 2));
+  } catch (err: unknown) {
+    caughtError = err;
+  } finally {
+    await finalizeRun(bag, registry, caughtError);
+  }
 
-  // 11. Print final summary
-  ttyRenderer.clear();
-  const snap = runState.snapshot();
-  const completeCount = snap.agents.complete;
-  const failedCount = snap.agents.failed;
-  const totalTokens = snap.tokens.total;
-  process.stderr.write(`
-=== Orchestrated Run Summary ===
-Agents: ${completeCount}/${snap.agents.total} complete${failedCount > 0 ? `, ${failedCount} failed` : ''}
-Findings: ${snap.findings.total}
-Tokens: ${snap.tokens.input > 0 ? `${Math.round(snap.tokens.input / 1000)}k in / ${Math.round(snap.tokens.output / 1000)}k out` : 'N/A (CLI providers)'}
-Coverage: ${snap.coverage ? `${snap.coverage.actualPercent}% (${snap.coverage.filesExamined}/${snap.coverage.filesTotal} files)` : 'N/A'}
-Duration: ${Math.round(snap.elapsedMs / 1000)}s
-================================
-`);
+  if (caughtError) throw caughtError;
 }
 
 // --- Helpers ---
 
 function buildDelegationPrompt(agent: AgentDefinition, config: OrchestrationConfig): string {
   const outputPath = join(config.sessionLogDir, `${formatTime()}_${agent.name}.md`);
+  const runDir = join(config.qaDataRoot, config.projectSlug, 'runs', config.runId);
+  const findingsJsonPath = join(runDir, 'findings', `${agent.name}.json`);
+  const agentDataJsonPath = join(runDir, 'agent-data', `${agent.name}.output.json`);
   let prompt =
     `${config.userPrompt}\n\n` +
-    `IMPORTANT — Write your complete output to a file.\n` +
-    `At the END of your analysis, use the Write tool to write your ENTIRE response to:\n` +
+    `IMPORTANT — Write your complete narrative output (markdown) to:\n` +
     `  ${outputPath}\n` +
     `This file must contain everything: every file you read, every grep you ran,\n` +
     `every finding with evidence, every clean check. This IS the forensic record.\n\n` +
+    `IMPORTANT — Emit structured findings as JSON. The orchestrator and downstream\n` +
+    `agents consume JSON, not markdown. At the END of your analysis:\n` +
+    `  1. Write an array of finding objects to:\n` +
+    `       ${findingsJsonPath}\n` +
+    `     Each object must include: severity, category, rule, file, title,\n` +
+    `     description, fix. Optional: line (number).\n` +
+    `     If you found no findings, write an empty array: []\n` +
+    `  2. Write any inter-agent handoff data (facts, summaries, references for\n` +
+    `     downstream agents) as a JSON object to:\n` +
+    `       ${agentDataJsonPath}\n` +
+    `     If you have no handoff data, skip this file or write: {}\n` +
+    `Malformed JSON in these files will abort the run with a loud error —\n` +
+    `prefer an empty array/object over guessed-at shapes.\n\n` +
     `IMPORTANT — Do NOT invoke other AI CLIs or nested agents from Bash.\n` +
     `Never run commands such as codex, claude, gemini, openclaw, aider, or similar.\n` +
     `Perform the analysis yourself using only the tools already available in this session.\n\n` +
@@ -713,6 +818,79 @@ function formatTime(): string {
     .join('-');
 }
 
+// --- Agent staging (upstream-data dependencies) ---
+//
+// Agents are grouped into stages. A stage-N+1 agent may read findings /
+// agent-data produced by stage-≤N agents, so dispatch is gated: no stage-N+1
+// job starts until every stage-≤N job has reached a terminal status.
+//
+// Stage definitions mirror the documented stages in scripts/qa-review-remote.sh:
+//   0 — Build & Semantic Safety (no upstream deps; run first)
+//   1 — Risk & Static Quality    (independent reviewers)
+//   2 — Integrity & Prep         (may consult stage-1 outputs)
+//   3 — Execution & Live Validation (depends on build/integrity signals)
+//   4 — Synthesis & Gate         (reads every prior agent's output)
+//
+// An agent not listed here defaults to DEFAULT_AGENT_STAGE.
+const DEFAULT_AGENT_STAGE = 1;
+
+const AGENT_STAGES: Record<string, number> = {
+  // Stage 0
+  'build-verifier': 0,
+  'semantic-diff-reviewer': 0,
+  // Stage 1
+  'code-reviewer': 1,
+  'security-reviewer': 1,
+  'observability-auditor': 1,
+  'workflow-extractor': 1,
+  'performance-reviewer': 1,
+  'risk-analyzer': 1,
+  'regression-risk-scorer': 1,
+  'deploy-readiness-reviewer': 1,
+  'contract-reviewer': 1,
+  'rbac-reviewer': 1,
+  'access-query-validator': 1,
+  'permission-chain-checker': 1,
+  'collection-reference-validator': 1,
+  'role-visibility-matrix': 1,
+  'a11y-reviewer': 1,
+  'compliance-reviewer': 1,
+  'dead-code-reviewer': 1,
+  'spec-verifier': 1,
+  'ui-intent-verifier': 1,
+  'stub-detector': 1,
+  // Stage 2
+  'schema-migration-reviewer': 2,
+  'mock-integrity-checker': 2,
+  'environment-parity-checker': 2,
+  'iac-reviewer': 2,
+  'dependency-auditor': 2,
+  'sca-reviewer': 2,
+  'api-spec-reviewer': 2,
+  'doc-reviewer': 2,
+  'crud-tester': 2,
+  'e2e-tester': 2,
+  'fixture-generator': 2,
+  'boundary-fuzzer': 2,
+  // Stage 3
+  'test-runner': 3,
+  'smoke-test-runner': 3,
+  'api-contract-prober': 3,
+  'failure-analyzer': 3,
+  // Stage 4 — synthesis, depends on EVERY prior agent's output
+  'qa-gap-analyzer': 4,
+  'release-gate-synthesizer': 4,
+  // Documentation agents (standalone runs) — treat as stage 1
+  'training-system-builder': 1,
+  'architecture-doc-builder': 1,
+};
+
+function getAgentStage(agentName: string): number {
+  // Strip chunk suffix (label form `agent-name-chunk-3`) before lookup.
+  const base = agentName.replace(/-chunk-\d+$/, '');
+  return AGENT_STAGES[base] ?? DEFAULT_AGENT_STAGE;
+}
+
 const REFDOC_AWARE_AGENTS = new Set([
   'ref-doc-verifier',
   'spec-verifier',
@@ -749,6 +927,28 @@ const VERBOSE_AGENTS = new Set([
   'release-gate-synthesizer',
 ]);
 
+/**
+ * Wrap a promise in a hard timeout. Used to guarantee the orchestrator can
+ * never stall on external I/O — auth proxy startup, provider validation,
+ * proxy shutdown, etc. The underlying operation may continue in the
+ * background; we simply stop waiting for it. Callers are responsible for
+ * handling the rejection (try/catch, runStep wrapper, etc.).
+ */
+function withOrchestratorTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} exceeded ${Math.round(timeoutMs / 1000)}s hard timeout`)),
+      timeoutMs,
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 function buildRefDocPromptSuffix(claimsManifestPath: string): string {
   return (
     `\n\nREFERENCE DOCUMENT VERIFICATION MODE\n` +
@@ -758,4 +958,273 @@ function buildRefDocPromptSuffix(claimsManifestPath: string): string {
     `Cross-reference these claims against the codebase as part of your analysis.\n` +
     `For claims in your domain that are contradicted or stale, emit findings with category "ref-doc".\n`
   );
+}
+
+// --- Finalization ---
+
+interface FinalizerBag {
+  runDir: string;
+  findingsPath: string;
+  metaPath: string;
+  sessionLogDir: string;
+  config: OrchestrationConfig;
+  modelsConfig: ModelsYaml;
+  available: ProviderName[];
+  disabled: string[];
+  apiAvail: ProviderName[];
+  cliAvail: ProviderName[];
+  testabilityReport?: TestabilityReport;
+  agentsToSkip?: Set<string>;
+  chunkPlan?: ChunkPlan | null;
+  strategy?: CoverageStrategy;
+  strategyConfig?: CoverageStrategyConfig;
+  allSourceFiles?: string[];
+  babysitter?: CoverageBabysitter;
+  runState?: RunState;
+  dashboard?: DashboardController;
+  ttyRenderer?: TtyRenderer;
+  auditor?: QualityAuditor;
+}
+
+function writePreSeedMeta(metaPath: string, config: OrchestrationConfig): void {
+  try {
+    writeFileSync(metaPath, JSON.stringify({
+      runId: config.runId,
+      projectSlug: config.projectSlug,
+      engine: 'orchestrated',
+      mode: config.mode,
+      repoPath: config.repoPath,
+      moduleScope: config.moduleScope ?? null,
+      isGitRepo: config.isGitRepo ?? true,
+      status: 'in-progress',
+      startedAt: new Date().toISOString(),
+    }, null, 2));
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`\nFinalizer: failed to pre-seed meta.json: ${msg}\n`);
+  }
+}
+
+/**
+ * Run finalization — always runs regardless of whether the main body succeeded.
+ * Each step is wrapped in its own try/catch so one failure does not skip the rest.
+ * Accumulates finalizationErrors and records a status of 'succeeded' | 'partial' | 'errored'
+ * in meta.json.
+ *
+ * Never throws — callers must check bag.finalizationErrors (or re-throw caughtError after).
+ */
+async function finalizeRun(
+  bag: FinalizerBag,
+  registry: ProviderRegistry,
+  caughtError: unknown,
+): Promise<void> {
+  const { runDir, findingsPath, metaPath, sessionLogDir, config, modelsConfig } = bag;
+  const finalizationErrors: Array<{ step: string; error: string }> = [];
+
+  const runStep = async (step: string, fn: () => void | Promise<void>): Promise<void> => {
+    try {
+      await fn();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`\nFinalizer: step "${step}" failed: ${msg}\n`);
+      finalizationErrors.push({ step, error: msg });
+    }
+  };
+
+  // 1. Dashboard teardown (idempotent in controller; safe to always call)
+  await runStep('dashboard.teardown', () => {
+    bag.dashboard?.teardown();
+  });
+
+  // 2. Auth proxy shutdown — hard timeout so a stuck subprocess kill never
+  // blocks finalization. If it times out, the orchestrator process exiting
+  // will let the OS reap the proxy anyway.
+  await runStep('registry.shutdown', async () => {
+    await withOrchestratorTimeout(registry.shutdown(), 10_000, 'registry.shutdown');
+  });
+
+  // 3. Dedup findings.jsonl
+  await runStep('deduplicateFindings', () => {
+    const dedupResult = deduplicateFindings(findingsPath, runDir);
+    if (dedupResult.removed > 0) {
+      process.stderr.write(
+        `\nDedup: ${dedupResult.original} -> ${dedupResult.deduplicated} findings ` +
+        `(${dedupResult.removed} cross-agent duplicates merged)\n`,
+      );
+    }
+  });
+
+  // 4. findings-final.json — deduplicated, severity-resolved array
+  let finalFindings: ReturnType<typeof finalizeFindingsFromJsonl> = [];
+  await runStep('finalizeFindingsFromJsonl', () => {
+    finalFindings = finalizeFindingsFromJsonl(config.projectSlug, config.runId);
+  });
+
+  // 5. delta.json — new vs recurring vs remediated against previous run
+  let delta: ReturnType<typeof computeDelta> | null = null;
+  await runStep('computeDelta+writeDelta', () => {
+    const previousRunsDir = join(config.qaDataRoot, config.projectSlug, 'runs');
+    const previousRunDir = findLatestRun(previousRunsDir, config.runId);
+    const previousRunId = previousRunDir ? previousRunDir.split('/').pop() : undefined;
+    // Previous findings come from the baseline file (if it exists) — that is the
+    // canonical "last successful set" maintained by evolve/delta flows.
+    const previousFindings = loadBaseline(config.projectSlug);
+    delta = computeDelta(finalFindings, previousFindings, config.runId, previousRunId);
+    writeDelta(config.projectSlug, config.runId, delta);
+  });
+
+  // 6. Update project-level lifecycle index
+  await runStep('updateFindingIndex', () => {
+    if (delta) {
+      updateFindingIndex(config.projectSlug, config.runId, finalFindings, delta);
+    }
+  });
+
+  // 7. Coverage report
+  await runStep('babysitter.writeReport', () => {
+    if (bag.babysitter) {
+      bag.babysitter.printReport();
+      bag.babysitter.writeReport(runDir);
+    }
+  });
+
+  // 8. Quality audit results
+  await runStep('auditor.writeResults', () => {
+    if (bag.auditor) {
+      const auditPath = join(runDir, 'quality-audit.json');
+      bag.auditor.writeResults(auditPath);
+    }
+  });
+
+  // 9. meta.json — final status + full metadata
+  const status = caughtError
+    ? 'errored'
+    : finalizationErrors.length > 0
+      ? 'partial'
+      : 'succeeded';
+
+  await runStep('writeMeta', () => {
+    const errorMessage = caughtError
+      ? (caughtError instanceof Error ? caughtError.message : String(caughtError))
+      : undefined;
+
+    writeFileSync(metaPath, JSON.stringify({
+      runId: config.runId,
+      projectSlug: config.projectSlug,
+      engine: 'orchestrated',
+      mode: config.mode,
+      repoPath: config.repoPath,
+      moduleScope: config.moduleScope ?? null,
+      isGitRepo: config.isGitRepo ?? true,
+      status,
+      error: errorMessage,
+      finalizationErrors: finalizationErrors.length > 0 ? finalizationErrors : undefined,
+      startedAt: new Date().toISOString(),
+      completedAt: new Date().toISOString(),
+      dataClassification: modelsConfig.dataClassification,
+      providers: { api: bag.apiAvail, cli: bag.cliAvail, disabled: bag.disabled },
+      testability: bag.testabilityReport ? {
+        checkabilityScore: bag.testabilityReport.uncheckable.checkabilityScore,
+        totalSourceFiles: bag.testabilityReport.repoProfile.totalSourceFiles,
+        skippedAgents: bag.agentsToSkip ? [...bag.agentsToSkip] : [],
+        recommendations: bag.testabilityReport.recommendations.filter(r => r.priority === 'critical' || r.priority === 'high'),
+      } : null,
+      chunking: bag.chunkPlan ? {
+        totalFiles: bag.chunkPlan.totalFiles,
+        checkableFiles: bag.chunkPlan.checkableFiles,
+        chunks: bag.chunkPlan.chunks.length,
+        excludedFiles: bag.chunkPlan.excludedFiles.length,
+      } : null,
+      coverage: bag.strategy && bag.strategyConfig && bag.babysitter && bag.allSourceFiles ? {
+        strategy: bag.strategy,
+        targetPercent: bag.strategyConfig.targetCoveragePercent,
+        actualPercent: bag.babysitter.getCoveragePercent(),
+        filesExamined: bag.babysitter.getFilesExamined().size,
+        filesTotal: bag.allSourceFiles.length,
+        retriesExecuted: bag.babysitter.getRetriesExecuted(),
+      } : null,
+      agents: bag.runState?.getAgents() ?? [],
+      fallbackEvents: bag.runState?.getFallbackEvents() ?? [],
+      qualityAudit: bag.auditor?.getResults() ?? [],
+    }, null, 2));
+  });
+
+  // 10. Human-facing markdown reports — documented exception to the JSON-only
+  //     rule. Each is deterministic from JSON artifacts; agent-authored narratives
+  //     are folded in where available.
+  await runStep('generateDeltaReport', () => {
+    generateDeltaReport({
+      projectSlug: config.projectSlug,
+      runId: config.runId,
+      outPath: join(runDir, 'delta-report.md'),
+      qaDataRoot: config.qaDataRoot,
+    });
+  });
+
+  await runStep('generateQaReport', () => {
+    generateQaReport({
+      runDir,
+      sessionLogDir,
+      projectSlug: config.projectSlug,
+      runId: config.runId,
+      outPath: join(runDir, 'qa-report.md'),
+    });
+  });
+
+  await runStep('generateRemediationPlan', () => {
+    generateRemediationPlan({
+      runDir,
+      projectSlug: config.projectSlug,
+      runId: config.runId,
+      outPath: join(runDir, 'remediation-plan.md'),
+    });
+  });
+
+  await runStep('generateObservabilityGaps', () => {
+    generateObservabilityGaps({
+      runDir,
+      sessionLogDir,
+      projectSlug: config.projectSlug,
+      runId: config.runId,
+      outPath: join(runDir, 'observability-gaps.md'),
+    });
+  });
+
+  await runStep('generateQaGaps', () => {
+    const failedAgents = (bag.runState?.getAgents() ?? [])
+      .filter(a => a.status === 'failed')
+      .map(a => ({ name: a.agentName, error: a.error }));
+    const skippedAgents = (bag.runState?.getAgents() ?? [])
+      .filter(a => a.status === 'complete' && a.error?.startsWith('Skipped'))
+      .map(a => ({ name: a.agentName, reason: a.error }));
+    generateQaGaps({
+      runDir,
+      sessionLogDir,
+      projectSlug: config.projectSlug,
+      runId: config.runId,
+      outPath: join(runDir, 'qa-gaps.md'),
+      failedAgents,
+      skippedAgents,
+    });
+  });
+
+  // 11. Print final summary (best-effort; never blocks finalization)
+  await runStep('summary', () => {
+    if (bag.ttyRenderer && bag.runState) {
+      bag.ttyRenderer.clear();
+      const snap = bag.runState.snapshot();
+      const completeCount = snap.agents.complete;
+      const failedCount = snap.agents.failed;
+      process.stderr.write(`
+=== Orchestrated Run Summary ===
+Status: ${status}${caughtError ? ` — ${caughtError instanceof Error ? caughtError.message : String(caughtError)}` : ''}
+Agents: ${completeCount}/${snap.agents.total} complete${failedCount > 0 ? `, ${failedCount} failed` : ''}
+Findings: ${snap.findings.total}
+Tokens: ${snap.tokens.input > 0 ? `${Math.round(snap.tokens.input / 1000)}k in / ${Math.round(snap.tokens.output / 1000)}k out` : 'N/A (CLI providers)'}
+Coverage: ${snap.coverage ? `${snap.coverage.actualPercent}% (${snap.coverage.filesExamined}/${snap.coverage.filesTotal} files)` : 'N/A'}
+Duration: ${Math.round(snap.elapsedMs / 1000)}s
+================================
+`);
+    }
+  });
 }

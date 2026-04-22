@@ -18,10 +18,12 @@ AGENT_FILE="build-verifier.md"
 
 # --- Parse arguments ---
 REPO=""
+ACCEPT_NO_GIT=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo) REPO="$2"; shift 2 ;;
+    --accept-no-git) ACCEPT_NO_GIT="1"; shift ;;
     *)      echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
@@ -37,8 +39,23 @@ fi
 REPO="$(cd "$REPO" && pwd)"
 
 if ! git -C "$REPO" rev-parse --git-dir >/dev/null 2>&1; then
-  echo "Error: $REPO is not a git repository" >&2
-  exit 1
+  echo "" >&2
+  echo "WARNING: $REPO is not a git repository." >&2
+  echo "  There is no VCS backup for this run. The agent may modify files." >&2
+  echo "" >&2
+  if [[ -n "$ACCEPT_NO_GIT" ]]; then
+    echo "  --accept-no-git was passed; continuing without a repo backup." >&2
+    echo "" >&2
+  elif [[ -t 0 ]]; then
+    read -rp "Continue anyway? [y/N] " git_ack
+    case "$git_ack" in
+      y|Y|yes|YES) echo "Acknowledged. Continuing." >&2 ;;
+      *) echo "Aborted. Run from a git-backed target, or pass --accept-no-git." >&2; exit 1 ;;
+    esac
+  else
+    echo "Error: non-interactive session and --accept-no-git was not passed." >&2
+    exit 1
+  fi
 fi
 
 # --- Backup and deploy ---

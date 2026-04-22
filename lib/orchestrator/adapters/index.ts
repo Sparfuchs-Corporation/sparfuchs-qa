@@ -9,6 +9,15 @@ import { isCliProvider } from '../types.js';
 
 // --- Adapter Interface ---
 
+export interface AuthCheckResult {
+  /** True when the adapter has cached credentials and can run non-interactively. */
+  authenticated: boolean;
+  /** Short label describing where the creds came from (env var name, file path, etc.). */
+  method?: string;
+  /** Human-readable instructions if not authenticated. Null when authenticated. */
+  suggestion?: string;
+}
+
 export interface AgentAdapter {
   readonly name: ProviderName;
   readonly type: 'api' | 'cli';
@@ -17,6 +26,13 @@ export interface AgentAdapter {
   detect(): DetectionResult;
   getCapabilities(): AdapterCapabilities;
   checkCompatibility(agent: AgentDefinition, config: OrchestrationConfig): AgentCliCompatibility;
+
+  /**
+   * Optional pre-flight auth check. CLI adapters that need interactive OAuth
+   * can implement this to fail fast with clear setup instructions before the
+   * first agent runs. Adapters without a meaningful check may omit it.
+   */
+  checkAuth?(): AuthCheckResult;
 
   run(
     agent: AgentDefinition,

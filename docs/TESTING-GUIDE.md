@@ -89,10 +89,7 @@ into the repo on demand. They are not committed to git.
 
 **Location:** `tests/platform/vitest/`, `tests/platform/playwright/`
 
-**Sync:**
-```bash
-make qa-sync
-```
+**Note:** platform-test sync via Firestore has been removed. Platform tests are no longer fetched from GCS — only tests committed to the repo run locally.
 
 **Run (Vitest):**
 ```bash
@@ -156,8 +153,7 @@ The sparfuchs-qa repo includes 15 canaries under `canaries/` that check code qua
 
 **Run sparfuchs-qa canaries:**
 ```bash
-make qa-quick     # stdout only
-make qa-push      # + push to Firestore
+make qa-quick     # stdout only (external push has been removed; local-only)
 ```
 
 Each canary returns a rich result object:
@@ -253,20 +249,6 @@ Baseline categories:
 
 ---
 
-## Flaky Test Tracking
-
-The system automatically detects flaky tests by comparing current vs historical results. Tests become candidates for flakiness after 2 flips and are confirmed flaky after 5 flips.
-
-Flaky test data lives in the `qa_flaky_tests` Firestore collection.
-
-**Track and report flaky tests:**
-```bash
-make qa-flaky           # report flaky tests
-npm run qa:flaky-track  # track flaky tests
-```
-
----
-
 ## Supply Chain Analysis (SCA)
 
 Package verification checks provenance attestations and generates CycloneDX-lite Software Bill of Materials (SBOMs).
@@ -275,7 +257,6 @@ Package verification checks provenance attestations and generates CycloneDX-lite
 ```bash
 make qa-sca        # full SCA check
 make qa-verify     # dry-run (no writes)
-make qa-sca-push   # SCA + push results
 ```
 
 ---
@@ -308,9 +289,7 @@ make qa-evolve-v2 PROJECT=my-app  # local qa-data/ based
 | Problem | Cause | Fix |
 |---------|-------|-----|
 | Canary fails with "Firebase app not initialized" | Missing env config | Set `GOOGLE_CLOUD_PROJECT` or run against emulator |
-| BDD test fails on login | Persona credentials expired | Re-run `npx tsx scripts/seed-ai-baselines.ts` or check Firebase Auth emulator |
-| Platform test not appearing after `make qa-sync` | Test is still Draft | Check Anvil QA dashboard — only Approved+ tests sync |
-| `vitest` cannot find platform tests | Directory empty | Run `make qa-sync` first |
+| BDD test fails on login | Persona credentials expired | Check Firebase Auth emulator |
 | Canary passes locally, fails in CI | Environment difference | Check that CI has the same Node version (20+) and env vars |
 | Too many Playwright browser instances | Worker count too high | Run with `--workers=1` to debug |
 

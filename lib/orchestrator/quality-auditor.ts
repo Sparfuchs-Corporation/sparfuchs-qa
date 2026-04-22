@@ -124,6 +124,15 @@ async function semanticAudit(
   );
   if (!auditProvider) return { issue: null, auditProvider: undefined };
 
+  // Hard timeout. Without this, a hung Anthropic API call (rate limit,
+  // transient network issue, proxy stall) blocks the dispatchJob promise
+  // from resolving — which in turn prevents the current stage's
+  // Promise.allSettled from resolving, which prevents the next stage from
+  // ever dispatching. The entire orchestrator freezes silently.
+  const SEMANTIC_AUDIT_TIMEOUT_MS = 30_000;
+  const abortController = new AbortController();
+  const timer = setTimeout(() => abortController.abort(), SEMANTIC_AUDIT_TIMEOUT_MS);
+
   try {
     const modelName = config.tiers.light[auditProvider as ApiProviderName];
     const model = registry.createModel(auditProvider as ApiProviderName, modelName, `audit-${agentName}`);
@@ -138,6 +147,7 @@ async function semanticAudit(
         `Tool calls: ${result.steps.flatMap(s => s.toolCalls).length}\n` +
         `First 2000 chars:\n${result.text.slice(0, 2000)}`,
       maxOutputTokens: 200,
+      abortSignal: abortController.signal,
     });
 
     const hasIssues = /incomplete|truncated|lazy|superficial|missing|skipped/i.test(audit.text);
@@ -153,8 +163,24 @@ async function semanticAudit(
       };
     }
     return { issue: null, auditProvider };
-  } catch {
-    return { issue: null, auditProvider };
+  } catch (err) {
+    // Timeout or API error — swallow so a failing audit never blocks the run.
+    // Surface it as an advisory issue so it still shows up in the report.
+    const msg = err instanceof Error ? err.message : String(err);
+    const isTimeout = abortController.signal.aborted;
+    return {
+      issue: isTimeout
+        ? {
+            type: 'give-up',
+            severity: 'warning',
+            description: `Semantic audit timed out after ${SEMANTIC_AUDIT_TIMEOUT_MS / 1000}s`,
+            evidence: `Audit via ${auditProvider} did not respond in time: ${msg}`,
+          }
+        : null,
+      auditProvider,
+    };
+  } finally {
+    clearTimeout(timer);
   }
 }
 

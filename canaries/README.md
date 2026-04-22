@@ -1,4 +1,3 @@
 # QA Canaries
 
-- `make qa-quick` → run canaries (stdout only)
-- `QA_PUSH_FIRESTORE=1 make qa-push` → run canaries + save history to Firestore
+- `make qa-quick` → run canaries (stdout only). External report push has been removed; canary runs are local-only.

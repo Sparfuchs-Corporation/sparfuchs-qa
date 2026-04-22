@@ -240,35 +240,64 @@ export function saveProjectConfig(projectSlug: string, config: ProjectConfig): v
 
 const FINDING_TAG_REGEX = /<!-- finding: ({.*?}) -->/g;
 
-export function parseFindingTags(agentOutput: string, agentName: string): QaFinding[] {
+export class AgentIngestionError extends Error {
+  constructor(
+    public readonly agentName: string,
+    public readonly runId: string | undefined,
+    public readonly kind: 'finding-tag' | 'agent-data-tag' | 'findings-json' | 'agent-data-json',
+    public readonly detail: string,
+    public readonly offset?: number,
+  ) {
+    const location = offset !== undefined ? ` at byte ${offset}` : '';
+    const runLabel = runId ? `run=${runId} ` : '';
+    super(`${runLabel}agent=${agentName} ${kind}${location}: ${detail}`);
+    this.name = 'AgentIngestionError';
+  }
+}
+
+/**
+ * Parse legacy HTML-comment finding tags. JSON.parse failures now throw
+ * AgentIngestionError naming the agent, run, and byte offset so invisible
+ * silent-skip bugs in agent output cannot hide broken findings. Prefer the
+ * new findings/{agent}.json file contract via readAgentFindingsFile below.
+ */
+export function parseFindingTags(
+  agentOutput: string,
+  agentName: string,
+  runId?: string,
+): QaFinding[] {
   const findings: QaFinding[] = [];
   let match;
 
   while ((match = FINDING_TAG_REGEX.exec(agentOutput)) !== null) {
+    let raw: Record<string, unknown>;
     try {
-      const raw = JSON.parse(match[1]);
-      const id = generateFindingId(
-        agentName,
-        raw.category ?? 'unknown',
-        raw.rule ?? 'unknown',
-        raw.file ?? 'unknown',
+      raw = JSON.parse(match[1]);
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new AgentIngestionError(
+        agentName, runId, 'finding-tag', detail, match.index,
       );
-      findings.push({
-        id,
-        agent: agentName,
-        severity: raw.severity ?? 'medium',
-        category: raw.category ?? 'unknown',
-        rule: raw.rule ?? 'unknown',
-        file: raw.file ?? 'unknown',
-        line: raw.line,
-        title: raw.title ?? '',
-        description: raw.description ?? raw.title ?? '',
-        fix: raw.fix ?? '',
-        timestamp: new Date().toISOString(),
-      });
-    } catch {
-      // Skip malformed tags — don't crash the pipeline
     }
+    const id = generateFindingId(
+      agentName,
+      String(raw.category ?? 'unknown'),
+      String(raw.rule ?? 'unknown'),
+      String(raw.file ?? 'unknown'),
+    );
+    findings.push({
+      id,
+      agent: agentName,
+      severity: (raw.severity as QaFinding['severity']) ?? 'medium',
+      category: String(raw.category ?? 'unknown'),
+      rule: String(raw.rule ?? 'unknown'),
+      file: String(raw.file ?? 'unknown'),
+      line: typeof raw.line === 'number' ? raw.line : undefined,
+      title: String(raw.title ?? ''),
+      description: String(raw.description ?? raw.title ?? ''),
+      fix: String(raw.fix ?? ''),
+      timestamp: new Date().toISOString(),
+    });
   }
 
   return findings;
@@ -278,20 +307,116 @@ export function parseFindingTags(agentOutput: string, agentName: string): QaFind
 
 const AGENT_DATA_TAG_REGEX = /<!-- agent-data: ({.*?}) -->/g;
 
-export function parseAgentDataTags(agentOutput: string): Record<string, unknown> {
+export function parseAgentDataTags(
+  agentOutput: string,
+  agentName: string = 'unknown',
+  runId?: string,
+): Record<string, unknown> {
   const data: Record<string, unknown> = {};
   let match;
 
   while ((match = AGENT_DATA_TAG_REGEX.exec(agentOutput)) !== null) {
+    let raw: Record<string, unknown>;
     try {
-      const raw = JSON.parse(match[1]) as Record<string, unknown>;
-      Object.assign(data, raw);
-    } catch {
-      // Skip malformed agent-data tags
+      raw = JSON.parse(match[1]) as Record<string, unknown>;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new AgentIngestionError(
+        agentName, runId, 'agent-data-tag', detail, match.index,
+      );
     }
+    Object.assign(data, raw);
   }
 
   return data;
+}
+
+// --- JSON-file ingestion: canonical path for agent handoffs ---
+//
+// Agents that emit findings write them as an array of QaFinding to
+//   <runDir>/findings/<agentName>.json
+// and arbitrary handoff data to
+//   <runDir>/agent-data/<agentName>.json
+// These are the canonical JSON-only handoff paths. The HTML-comment tag
+// functions above remain as a fallback for agents that have not migrated.
+
+export function readAgentFindingsFile(
+  runDir: string,
+  agentName: string,
+  runId?: string,
+): QaFinding[] {
+  const filePath = join(runDir, 'findings', `${agentName}.json`);
+  if (!existsSync(filePath)) return [];
+
+  const raw = readFileSync(filePath, 'utf-8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AgentIngestionError(agentName, runId, 'findings-json', detail);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new AgentIngestionError(
+      agentName, runId, 'findings-json',
+      `expected array, got ${typeof parsed}`,
+    );
+  }
+
+  const findings: QaFinding[] = [];
+  for (const entry of parsed) {
+    if (!entry || typeof entry !== 'object') {
+      throw new AgentIngestionError(
+        agentName, runId, 'findings-json',
+        `array contains non-object entry: ${JSON.stringify(entry)}`,
+      );
+    }
+    const r = entry as Record<string, unknown>;
+    const id = generateFindingId(
+      agentName,
+      String(r.category ?? 'unknown'),
+      String(r.rule ?? 'unknown'),
+      String(r.file ?? 'unknown'),
+    );
+    findings.push({
+      id,
+      agent: agentName,
+      severity: (r.severity as QaFinding['severity']) ?? 'medium',
+      category: String(r.category ?? 'unknown'),
+      rule: String(r.rule ?? 'unknown'),
+      file: String(r.file ?? 'unknown'),
+      line: typeof r.line === 'number' ? r.line : undefined,
+      title: String(r.title ?? ''),
+      description: String(r.description ?? r.title ?? ''),
+      fix: String(r.fix ?? ''),
+      timestamp: new Date().toISOString(),
+    });
+  }
+  return findings;
+}
+
+export function readAgentDataFile(
+  runDir: string,
+  agentName: string,
+  runId?: string,
+): Record<string, unknown> {
+  const filePath = join(runDir, 'agent-data', `${agentName}.input.json`);
+  if (!existsSync(filePath)) return {};
+  const raw = readFileSync(filePath, 'utf-8');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new AgentIngestionError(agentName, runId, 'agent-data-json', detail);
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new AgentIngestionError(
+      agentName, runId, 'agent-data-json',
+      `expected object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}`,
+    );
+  }
+  return parsed as Record<string, unknown>;
 }
 
 export function writeAgentOutputEnvelope(

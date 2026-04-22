@@ -7,11 +7,6 @@
  * Usage:
  *   npx tsx scripts/package-verify.ts [repo-path]
  *   npx tsx scripts/package-verify.ts --dry-run
- *   npx tsx scripts/package-verify.ts --push
- *
- * Environment variables:
- *   QA_PLATFORM_URL  — ingestAgentReport endpoint (for --push)
- *   AGENT_REPORT_KEY — X-Agent-Key header value (for --push)
  */
 
 import { execSync } from 'node:child_process';
@@ -161,7 +156,6 @@ function checkSignatures(repoPath: string): string {
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
-  const push = args.includes('--push');
   const repoPath = resolve(args.find(a => !a.startsWith('--')) || '.');
 
   console.log(`Package Verification: ${repoPath}`);
@@ -224,27 +218,6 @@ async function main(): Promise<void> {
   };
 
   console.log(JSON.stringify(report, null, 2));
-
-  if (push) {
-    const platformUrl = process.env.QA_PLATFORM_URL;
-    const agentKey = process.env.AGENT_REPORT_KEY;
-    if (!platformUrl || !agentKey) {
-      console.error('QA_PLATFORM_URL and AGENT_REPORT_KEY required for --push');
-      process.exit(1);
-    }
-
-    const resp = await fetch(platformUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Agent-Key': agentKey },
-      body: JSON.stringify(report),
-    });
-
-    if (!resp.ok) {
-      console.error(`POST failed: ${resp.status}`);
-      process.exit(1);
-    }
-    console.log('Pushed to QA Platform');
-  }
 }
 
 main().catch(console.error);

@@ -305,42 +305,63 @@ export class CoverageBabysitter {
     const paths: string[] = [];
     const args = entry.args;
 
-    switch (entry.tool) {
-      case 'Read': {
-        const filePath = args.file_path;
-        if (typeof filePath === 'string') {
-          paths.push(this.normalizePath(filePath));
-        }
-        break;
+    // Normalize: accept both Claude CLI tool names (Read, Grep, Glob) and
+    // Gemini CLI tool names (read_file, read_many_files, search_file_content,
+    // glob, list_directory, edit, write_file). Arg names also differ:
+    // Claude uses file_path / path; Gemini uses absolute_path / path / paths.
+    const tool = entry.tool;
+
+    // --- file-read operations ---
+    if (
+      tool === 'Read'
+      || tool === 'Edit'
+      || tool === 'Write'
+      || tool === 'read_file'
+      || tool === 'write_file'
+      || tool === 'edit'
+      || tool === 'replace'
+    ) {
+      const filePath = args.file_path ?? args.absolute_path ?? args.path;
+      if (typeof filePath === 'string') {
+        paths.push(this.normalizePath(filePath));
       }
-      case 'Grep': {
-        const searchPath = args.path;
-        if (typeof searchPath === 'string') {
-          const normalized = this.normalizePath(searchPath);
-          // Grep path is a directory or file — match all allFiles under it
-          for (const f of this.allFilesArray) {
-            if (f === normalized || f.startsWith(normalized + '/')) {
-              paths.push(f);
-            }
-          }
-        }
-        break;
-      }
-      case 'Glob': {
-        const searchPath = args.path;
-        if (typeof searchPath === 'string') {
-          const normalized = this.normalizePath(searchPath);
-          for (const f of this.allFilesArray) {
-            if (f === normalized || f.startsWith(normalized + '/')) {
-              paths.push(f);
-            }
-          }
-        }
-        break;
-      }
-      // Future tools (AST, DependencyGraph) will be added here
+      return paths;
     }
 
+    // --- multi-file read (Gemini read_many_files) ---
+    if (tool === 'read_many_files') {
+      const filePaths = args.paths ?? args.absolute_paths;
+      if (Array.isArray(filePaths)) {
+        for (const p of filePaths) {
+          if (typeof p === 'string') paths.push(this.normalizePath(p));
+        }
+      }
+      return paths;
+    }
+
+    // --- directory / pattern scan operations — expand the dir to all
+    //     matching files in allFilesArray so coverage credit is granted to
+    //     every file under the scanned path ---
+    if (
+      tool === 'Grep'
+      || tool === 'Glob'
+      || tool === 'search_file_content'
+      || tool === 'glob'
+      || tool === 'list_directory'
+    ) {
+      const searchPath = args.path ?? args.absolute_path ?? args.directory;
+      if (typeof searchPath === 'string') {
+        const normalized = this.normalizePath(searchPath);
+        for (const f of this.allFilesArray) {
+          if (f === normalized || f.startsWith(normalized + '/')) {
+            paths.push(f);
+          }
+        }
+      }
+      return paths;
+    }
+
+    // Unknown tool — no coverage credit (shell commands, web fetches, etc.)
     return paths;
   }
 

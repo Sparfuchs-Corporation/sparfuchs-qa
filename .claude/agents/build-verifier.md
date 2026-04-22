@@ -78,32 +78,56 @@ Log all discovered CI commands under "CI Commands Discovered".
 
 ## Phase 3: Dependency Check
 
-Before running tools, verify dependencies are installed:
+Before running tools, verify dependencies are installed. A missing dependency
+directory is an **environmental precondition**, not a code-quality defect.
+Do NOT emit a CRITICAL finding — that conflates operator setup state with
+the code we're actually reviewing. Record it in the narrative report so the
+operator can act, and skip the downstream build/lint/typecheck/test phases
+for that language (they would produce "Cannot find module" noise that
+drowns out real signal).
 
 **Node/TS**:
 ```bash
 test -d node_modules && echo "node_modules: present" || echo "node_modules: MISSING"
 ```
-If `node_modules` is missing, report a single finding:
+If missing, note in the narrative:
 ```
-CRITICAL: Dependencies not installed. Run `npm install` (or `pnpm install`) before build verification.
+Build verification skipped for Node/TS — `node_modules/` not present in the
+target. Run `npm install` (or `pnpm install` / `yarn install`) in the target
+repo before the next QA run to get format/lint/typecheck/build coverage.
 ```
-Then skip Phase 4 for Node/TS commands (they will all fail with "Cannot find module" noise).
+Do not emit a structured finding for this precondition. Continue with any
+other-language phases that still have their dependencies.
 
 **Python**:
 ```bash
 test -d .venv && echo ".venv: present" || test -d venv && echo "venv: present" || echo "venv: not found (may use system Python)"
 ```
+If missing, narrative note only (no structured finding), skip Python build phases.
 
 **Go**:
 ```bash
 test -f go.sum && echo "go.sum: present" || echo "go.sum: MISSING — run go mod tidy"
 ```
+If missing, narrative note only (no structured finding), skip Go build phases.
 
 **Rust**:
 ```bash
 test -d target && echo "target/: present" || echo "target/: not found (first build)"
 ```
+A missing `target/` is normal for a first build — no note needed.
+
+### When IS a dependency check a real finding?
+
+Emit a structured finding (severity medium or higher) only when a dependency
+state points at a genuine code defect:
+
+- `package-lock.json` references a registry that no longer resolves (supply-chain issue)
+- `package.json` declares a dependency version that's incompatible with the Node version specified in `engines`
+- `go.mod` / `go.sum` hash mismatch (integrity failure)
+- Lock file absent in a CI-bound repo (reproducibility defect)
+
+"Operator forgot to run `npm install`" is not one of these.
 
 ## Phase 4: Pipeline Execution
 

@@ -38,12 +38,12 @@ the deploy if any canary fails.
 
 ```bash
 # --- Quick Checks ---
-make qa-quick                    # Run 15 canary checks (stdout)
-make qa-push                     # Run canaries + push to Firestore
+make qa-quick                    # Run 15 canary checks (stdout, local-only)
 
 # --- Full QA Reviews ---
 make qa-review REPO=/path FULL=1          # Full audit
 make qa-review REPO=/path                 # Diff review (changed files only)
+make qa-review REPO=/path ACCEPT_NO_GIT=1 # Non-git target (explicit acceptance)
 make qa-build-check REPO=/path            # Build verification only
 make qa-schema-check REPO=/path           # Schema validation only
 
@@ -56,21 +56,16 @@ make qa-stubs REPO=/path                  # Stub/fake detection
 
 # --- Supply Chain & Package Verification ---
 make qa-sca                      # Full SCA check + SBOM
-make qa-sca-push                 # SCA + push results
 make qa-verify                   # SCA dry-run
 
 # --- Finding Analysis ---
 make qa-delta PROJECT=my-app     # Compare findings across runs
 make qa-cleanup PROJECT=my-app   # Archive old runs (keep 10)
-make qa-flaky                    # Report flaky tests
 
 # --- Evolution & Adaptation ---
-make qa-evolve                   # Analyze canary history, suggest changes
-make qa-evolve-dry               # Dry-run evolution
 make qa-evolve-v2 PROJECT=my-app # Local evolution (uses qa-data/)
 
-# --- Data & Cache ---
-make qa-sync PROJECT=my-app      # Sync Firestore to local qa-data/
+# --- Cache ---
 make qa-cache-status PROJECT=my-app  # Show file audit cache state
 make qa-cache-reset PROJECT=my-app   # Clear file audit cache
 
@@ -80,10 +75,10 @@ make qa-keys-setup               # Instructions for key storage
 
 # --- Agent Integrity ---
 make qa-hashes-update            # Regenerate agent-hashes.json
-
-# --- Seed baselines (one-time setup) ---
-npm run qa:seed-baselines
 ```
+
+Note: external report push (Firestore, QA-Platform POST) has been removed.
+All artifacts are written locally under `qa-data/<project>/runs/<runId>/`.
 
 ---
 
@@ -92,7 +87,7 @@ npm run qa:seed-baselines
 1. **Finding** — QA Platform detects a gap (missing test, flaky behavior, coverage hole)
 2. **Test generation** — Platform drafts a test and writes it to GCS as a Draft
 3. **Review** — A human approves or rejects the draft via the Anvil QA dashboard
-4. **Activation** — Approved tests sync into the repo via `make qa-sync`
+4. **Activation** — Approved tests are committed into the repo (Firestore-backed sync has been removed)
 5. **Graduation** — Once a test passes consistently for 5+ builds, it graduates to the permanent suite
 6. **Evolution** — `make qa-evolve` analyzes canary history and suggests threshold tightening for stable canaries or investigation for unstable ones
 
@@ -136,8 +131,6 @@ If the canary fails, you will see its name, severity, hint, and value in the out
 - Node 20+
 - npm (workspace-aware)
 - Playwright (installed via `make qa-setup`)
-- `gcloud` CLI authenticated (only needed for `make qa-sync` and AI baseline seeding)
-- Firebase project access for the dev environment
 
 ---
 
@@ -146,7 +139,6 @@ If the canary fails, you will see its name, severity, hint, and value in the out
 | Problem | Fix |
 |---------|-----|
 | `make qa-quick` fails to find canaries | Run `make qa-setup` first or check you are in the repo root |
-| `make qa-sync` fails with permission denied | Run `gcloud auth login` and ensure you have Storage Object Viewer on the QA bucket |
 | Canary passes locally but fails in Cloud Build | Check that the canary does not depend on local env vars or files outside the repo |
 | Playwright tests time out | Run `npx playwright install chromium --with-deps` to ensure the browser is installed |
 

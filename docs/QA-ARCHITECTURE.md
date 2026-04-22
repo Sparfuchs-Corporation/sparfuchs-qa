@@ -29,7 +29,7 @@ flowchart LR
     end
 
     subgraph Test Sync
-        G -->|make qa-sync| K[Local tests/platform/]
+        G -->|committed to repo| K[Local tests/platform/]
     end
 ```
 

@@ -9,12 +9,19 @@ import type { OrchestrationConfig, ProviderName, CoverageStrategy } from '../lib
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
 
+const BOOLEAN_FLAGS = new Set(['no-git']);
+
 function parseArgs(argv: string[]): Record<string, string> {
   const args: Record<string, string> = {};
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg.startsWith('--') && i + 1 < argv.length) {
-      const key = arg.slice(2);
+    if (!arg.startsWith('--')) continue;
+    const key = arg.slice(2);
+    if (BOOLEAN_FLAGS.has(key)) {
+      args[key] = 'true';
+      continue;
+    }
+    if (i + 1 < argv.length) {
       args[key] = argv[++i];
     }
   }
@@ -49,6 +56,7 @@ async function main(): Promise<void> {
     : coverageArg === 'off' ? undefined : undefined;
   const concurrencyArg = args['concurrency'] ?? process.env.CONCURRENCY;
   const concurrency = concurrencyArg ? parseInt(concurrencyArg, 10) : undefined;
+  const isGitRepo = args['no-git'] !== 'true';
 
   // Derive project slug from repo directory name
   const projectSlug = repoPath.split('/').pop()!.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -76,6 +84,7 @@ async function main(): Promise<void> {
     baseline,
     coverageStrategy,
     concurrency,
+    isGitRepo,
   };
 
   try {

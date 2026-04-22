@@ -123,7 +123,14 @@ export function storeApiKey(keyName: string, value: string): void {
 }
 
 export function listStoredKeys(): string[] {
-  const TARGET_KEYS = ['XAI_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY', 'ANTHROPIC_API_KEY'];
+  const TARGET_KEYS = [
+    'XAI_API_KEY',
+    'GOOGLE_GENERATIVE_AI_API_KEY',
+    'ANTHROPIC_API_KEY',
+    'OPENAI_API_KEY',
+    // CLI adapters that benefit from keychain-sourced auth
+    'GEMINI_API_KEY',
+  ];
   const found: string[] = [];
   for (const key of TARGET_KEYS) {
     if (readFromKeychain(key)) found.push(key);

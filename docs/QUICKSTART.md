@@ -369,8 +369,7 @@ The credential file is written to `/tmp/sparfuchs-qa-creds-{runid}.json` with `0
 Quick sanity checks for the QA infrastructure:
 
 ```bash
-make qa-quick      # Run 15 canary checks (stdout)
-make qa-push       # Run canaries + push results to Firestore
+make qa-quick      # Run 15 canary checks (stdout). External report push has been removed.
 ```
 
 ### Supply Chain & Package Verification
@@ -379,7 +378,6 @@ Check for security vulnerabilities and unmaintained dependencies:
 
 ```bash
 make qa-sca             # Full SCA (supply chain attack) check + SBOM generation
-make qa-sca-push        # SCA + push results to Firestore
 make qa-verify          # SCA dry-run (no writes)
 ```
 
@@ -392,30 +390,12 @@ make qa-delta PROJECT=my-app        # Compare findings across runs
 make qa-cleanup PROJECT=my-app      # Archive old runs (keeps 10 most recent)
 ```
 
-### Flaky Test Tracking
-
-Identify and report tests that fail intermittently:
-
-```bash
-make qa-flaky      # Report flaky tests
-```
-
 ### Evolution & Adaptation
 
-Analyze historical canary data and recommend threshold adjustments:
+Analyze historical QA data and recommend threshold adjustments:
 
 ```bash
-make qa-evolve           # Analyze canary history, suggest threshold changes
-make qa-evolve-dry       # Dry-run evolution analysis
-make qa-evolve-v2 PROJECT=my-app  # Local evolution (uses qa-data/ instead of Firestore)
-```
-
-### Data Sync
-
-Synchronize Firestore data with local analysis:
-
-```bash
-make qa-sync PROJECT=my-app    # Sync Firestore data to local qa-data/
+make qa-evolve-v2 PROJECT=my-app  # Local evolution (uses qa-data/)
 ```
 
 ### Schema & Build Checks
@@ -460,18 +440,12 @@ All make commands have corresponding npm scripts:
 ```bash
 npm run canaries               # Run canaries
 npm run qa:quick               # Run canaries (same as qa-quick)
-npm run qa:report-push         # Push QA report to Firestore
-npm run qa:nightly             # Trigger nightly regression
-npm run qa:seed-baselines      # Seed AI baselines
 npm run qa:sca                 # Full SCA check
 npm run qa:verify              # SCA dry-run
-npm run qa:flaky               # Flaky test report
-npm run qa:flaky-track         # Track flaky tests
 npm run qa:cred-setup          # Run credential setup wizard
 npm run qa:delta               # Delta report
 npm run qa:evolve-v2           # Evolution analysis v2
 npm run qa:cleanup             # Archive old runs
-npm run qa:sync                # Firestore sync
 ```
 
 ---

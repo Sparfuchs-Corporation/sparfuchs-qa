@@ -7,18 +7,12 @@
     "canaries": "tsx canaries/index.ts",
     "canaries:watch": "tsx canaries/index.ts --watch",
     "qa:quick": "tsx canaries/index.ts",
-    "qa:report-push": "tsx scripts/qa-report-adapter.ts",
-    "qa:nightly": "tsx scripts/trigger-nightly-regression.ts",
-    "qa:seed-baselines": "tsx scripts/seed-ai-baselines.ts",
     "qa:sca": "tsx scripts/package-verify.ts",
     "qa:verify": "tsx scripts/package-verify.ts --dry-run",
-    "qa:flaky": "tsx scripts/flaky-test-tracker.ts --report",
-    "qa:flaky-track": "tsx scripts/flaky-test-tracker.ts",
     "qa:cred-setup": "tsx lib/credentials/setup-wizard.ts",
     "qa:delta": "tsx scripts/qa-delta-report.ts",
     "qa:evolve-v2": "tsx scripts/qa-evolve-v2.ts",
-    "qa:cleanup": "tsx scripts/qa-cleanup.ts",
-    "qa:sync": "tsx scripts/qa-firestore-sync.ts"
+    "qa:cleanup": "tsx scripts/qa-cleanup.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.0",
