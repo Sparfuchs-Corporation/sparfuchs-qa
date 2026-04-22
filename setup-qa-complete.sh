@@ -50,6 +50,8 @@ done
 echo "=== Sparfuchs QA setup ==="
 echo "Repo root: $SCRIPT_DIR"
 
+# Required: core project files + directories. Missing any of these means the
+# repo is incomplete and setup cannot proceed.
 required_files=(
   "package.json"
   "package-lock.json"
@@ -57,7 +59,6 @@ required_files=(
   "tsconfig.json"
   "CLAUDE.md"
   "CLAUDE.local.md.example"
-  ".claude/settings.json"
 )
 
 required_dirs=(
@@ -65,32 +66,54 @@ required_dirs=(
   "scripts"
   "docs"
   "canaries"
+)
+
+# Optional: Claude Code integration assets. Not shipped in every checkout
+# (public distributions exclude the `.claude/` surface). Missing optional
+# paths print a warning but do not block setup.
+optional_files=(
+  ".claude/settings.json"
+)
+
+optional_dirs=(
   ".claude/agents"
   ".claude/hooks"
   ".claude/rules"
   ".claude/skills"
 )
 
-missing_paths=()
+missing_required=()
+missing_optional=()
 
 for path in "${required_files[@]}"; do
-  if [[ ! -f "$path" ]]; then
-    missing_paths+=("$path")
-  fi
+  [[ -f "$path" ]] || missing_required+=("$path")
 done
 
 for path in "${required_dirs[@]}"; do
-  if [[ ! -d "$path" ]]; then
-    missing_paths+=("$path")
-  fi
+  [[ -d "$path" ]] || missing_required+=("$path")
 done
 
-if ((${#missing_paths[@]} > 0)); then
+for path in "${optional_files[@]}"; do
+  [[ -f "$path" ]] || missing_optional+=("$path")
+done
+
+for path in "${optional_dirs[@]}"; do
+  [[ -d "$path" ]] || missing_optional+=("$path")
+done
+
+if ((${#missing_required[@]} > 0)); then
   echo "Missing required repo paths:" >&2
-  for path in "${missing_paths[@]}"; do
+  for path in "${missing_required[@]}"; do
     echo "  - $path" >&2
   done
   exit 1
+fi
+
+if ((${#missing_optional[@]} > 0)); then
+  echo "Optional Claude Code assets not present (setup will continue without them):"
+  for path in "${missing_optional[@]}"; do
+    echo "  - $path"
+  done
 fi
 
 if compgen -G ".claude/hooks/*.sh" >/dev/null; then
