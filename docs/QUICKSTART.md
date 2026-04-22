@@ -20,8 +20,8 @@ Run a multi-agent QA review against any git repository. This guide covers instal
 ## Step 1: Clone and Install
 
 ```bash
-git clone https://github.com/Sparfuchs-Pro/sparfuchs-qa-llm.git
-cd sparfuchs-qa-llm
+git clone https://github.com/Sparfuchs-Corporation/sparfuchs-qa.git
+cd sparfuchs-qa
 make qa-setup    # runs npm install
 ```
 
