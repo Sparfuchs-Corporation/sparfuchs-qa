@@ -1,6 +1,6 @@
 # Plan: Coverage Babysitter + v6 Agentic QA Architecture
 
-**Author**: Bob Reny | **Date**: 2026-04-15 | **Status**: Review Draft
+**Date**: 2026-04-15 | **Status**: Review Draft
 **Branch**: `feat/qa-v6-foundation` | **Triggered by**: QA gap analysis (2026-04-14, run `qa-20260414-1844-61d0`)
 
 ## Context
