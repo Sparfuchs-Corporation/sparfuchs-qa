@@ -110,6 +110,14 @@ agentOverrides:
     provider: xai
     maxSteps: 100       # verifying many claims against codebase
 
+  # Agents that timed out on light tier (8m) in prior runs. Their workload
+  # (full doc tree walk / full dep graph scan) genuinely needs the heavy
+  # tier budget. Preflight gap-healer picks these up on retry too.
+  doc-reviewer:
+    tier: heavy
+  sca-reviewer:
+    tier: heavy
+
 # --- Token Budget ---
 # Controls cost estimation and budget presets.
 # CLI providers manage billing through their own accounts — shown as informational.

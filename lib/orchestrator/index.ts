@@ -240,9 +240,15 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
   config.sourceFiles = new Set(allSourceFiles);
   bag.allSourceFiles = allSourceFiles;
+  // mode=full implies "audit this repo thoroughly," not "this exact
+  // percentage of files." If the operator didn't explicitly pick a
+  // coverage strategy, upgrade the default from `balanced` (65%) to
+  // `thorough` (85%) so full mode actually audits most of the source.
+  // Explicit --coverage or QA_COVERAGE_STRATEGY wins over this default.
+  const defaultStrategy: CoverageStrategy = config.mode === 'full' ? 'thorough' : 'balanced';
   const strategy: CoverageStrategy = config.coverageStrategy
     ?? modelsConfig.coverageStrategy
-    ?? 'balanced';
+    ?? defaultStrategy;
   bag.strategy = strategy;
   const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet], strategy);
   bag.chunkPlan = chunkPlan;

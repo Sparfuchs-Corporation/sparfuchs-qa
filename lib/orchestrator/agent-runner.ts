@@ -90,20 +90,39 @@ const DEFAULT_AGENT_TIMEOUTS_MS: Record<string, number> = {
   heavy: 25 * 60_000,  // 25 min — chunked / multi-pass agents
 };
 
-function resolveAgentTimeoutMs(tier: string): number {
+// Resolve the hard-timeout budget for an agent. Precedence:
+//   1. Per-agent override agent.timeoutMs (from config/models.yaml
+//      agentOverrides.<name>.timeoutMs). Highest priority — the config
+//      author knows the workload.
+//   2. Global env var QA_AGENT_TIMEOUT_MS.
+//   3. Per-tier env var QA_AGENT_TIMEOUT_{LIGHT|MID|HEAVY}_MS.
+//   4. Per-tier default (see DEFAULT_AGENT_TIMEOUTS_MS).
+function resolveAgentTimeoutMs(agent: AgentDefinition): number {
+  if (typeof agent.timeoutMs === 'number' && agent.timeoutMs > 0) return agent.timeoutMs;
   const flat = Number(process.env.QA_AGENT_TIMEOUT_MS);
   if (Number.isFinite(flat) && flat > 0) return flat;
-  const perTier = Number(process.env[`QA_AGENT_TIMEOUT_${tier.toUpperCase()}_MS`]);
+  const perTier = Number(process.env[`QA_AGENT_TIMEOUT_${agent.tier.toUpperCase()}_MS`]);
   if (Number.isFinite(perTier) && perTier > 0) return perTier;
-  return DEFAULT_AGENT_TIMEOUTS_MS[tier] ?? DEFAULT_AGENT_TIMEOUTS_MS.mid;
+  return DEFAULT_AGENT_TIMEOUTS_MS[agent.tier] ?? DEFAULT_AGENT_TIMEOUTS_MS.mid;
+}
+
+// Distinct error class so callers can distinguish timeout from other
+// adapter failures and apply a different retry policy (bump budget 1.5x
+// and try same provider once more before falling back).
+export class AgentTimeoutError extends Error {
+  readonly kind = 'timeout' as const;
+  constructor(message: string, readonly timeoutMs: number) {
+    super(message);
+    this.name = 'AgentTimeoutError';
+  }
 }
 
 /**
  * Run an adapter invocation under a hard timeout. If the timeout fires, the
- * returned promise rejects with an Error that the caller treats like any
- * other adapter failure (fall back, mark status failed, move on). We cannot
- * force the underlying child process or HTTP call to stop from here, but we
- * CAN stop waiting for it and let the next agent / stage proceed.
+ * returned promise rejects with AgentTimeoutError so the caller can retry
+ * once on the same provider with a longer budget (1.5x) before falling
+ * back. We cannot force the underlying child process or HTTP call to stop
+ * from here, but we CAN stop waiting for it and let the next attempt begin.
  */
 function withTimeout<T>(
   promise: Promise<T>,
@@ -113,7 +132,10 @@ function withTimeout<T>(
   let timer: NodeJS.Timeout;
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      reject(new Error(`${label} exceeded ${Math.round(timeoutMs / 1000)}s hard timeout`));
+      reject(new AgentTimeoutError(
+        `${label} exceeded ${Math.round(timeoutMs / 1000)}s hard timeout`,
+        timeoutMs,
+      ));
     }, timeoutMs);
   });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
@@ -200,14 +222,19 @@ export async function runAgent(
       }
     }
 
-    // Retry loop within the same provider for transient failures
+    // Retry loop within the same provider for transient failures. One extra
+    // in-tier retry is allowed on timeout (with a 1.5x budget bump) before
+    // falling back — the most common cause is a genuine long-running agent,
+    // and the agent's workload doesn't get smaller on another provider.
+    let timeoutRetryBudgetBumped = false;
     for (let attempt = 0; attempt <= MAX_RETRIES_PER_PROVIDER; attempt++) {
       if (abortSignal?.aborted) break;
       status.status = attempt > 0 ? 'retrying' : (status.retryCount > 0 ? 'retrying' : 'running');
       onStatusChange(status);
 
       try {
-        const timeoutMs = resolveAgentTimeoutMs(agent.tier);
+        const baseTimeoutMs = resolveAgentTimeoutMs(agent);
+        const timeoutMs = timeoutRetryBudgetBumped ? Math.round(baseTimeoutMs * 1.5) : baseTimeoutMs;
         const result = await withTimeout(
           adapter.run(
             agent, delegationPrompt, config, status, onStatusChange, onFallback,
@@ -219,9 +246,22 @@ export async function runAgent(
       } catch (err: unknown) {
         lastError = err instanceof Error ? err : new Error(String(err));
 
+        const isTimeout = err instanceof AgentTimeoutError;
         const isQuota = isQuotaError(err);
         const isRateLimit = isRateLimitError(err);
         const isServer = isServerError(err);
+
+        // Timeout retry: give the same provider one more chance with a 1.5x
+        // budget. If it still times out, fall back to the next provider —
+        // don't chase the same wall forever.
+        if (isTimeout && !timeoutRetryBudgetBumped && attempt < MAX_RETRIES_PER_PROVIDER) {
+          timeoutRetryBudgetBumped = true;
+          status.retryCount++;
+          process.stderr.write(
+            `\n[timeout-retry] ${agent.name} (${provider}) — retrying once with 1.5x budget\n`,
+          );
+          continue;
+        }
 
         // Quota exhausted — do NOT retry (resets in hours) and mark the
         // whole provider off-limits for the rest of the run so future

@@ -117,6 +117,11 @@ export interface AgentOverride {
   tier?: ModelTier;
   disableBash?: boolean;
   maxSteps?: number;
+  // Hard per-agent timeout in milliseconds. When set, this wins over the
+  // tier-default and the QA_AGENT_TIMEOUT_{TIER}_MS env var. Use for agents
+  // whose workload genuinely exceeds the tier band (e.g., doc-reviewer on a
+  // large repo).
+  timeoutMs?: number;
 }
 
 export interface ModelsYaml {
@@ -143,6 +148,9 @@ export interface AgentDefinition {
   disableBash: boolean;
   sourcePath: string;
   contentHash: string;
+  // Per-agent timeout override (see AgentOverride.timeoutMs). Populated by
+  // agent-parser from config/models.yaml agentOverrides.
+  timeoutMs?: number;
 }
 
 // --- Run Status ---

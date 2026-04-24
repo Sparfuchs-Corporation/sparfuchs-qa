@@ -84,6 +84,7 @@ export function parseAgentFile(
     disableBash,
     sourcePath: filePath,
     contentHash: hash,
+    timeoutMs: agentOverride.timeoutMs,
   };
 }
 
