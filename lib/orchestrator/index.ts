@@ -818,6 +818,43 @@ function formatTime(): string {
     .join('-');
 }
 
+// Human-readable local timestamp: 'YYYY-MM-DD HH:MM:SS TZ' (e.g., '2026-04-23 16:17:31 PDT').
+// Falls back to an abbreviation-less string if the JS runtime cannot resolve one.
+function formatLocalTimestamp(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = d.getFullYear();
+  const mo = pad(d.getMonth() + 1);
+  const da = pad(d.getDate());
+  const h = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  let tzAbbrev = '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(d);
+    tzAbbrev = parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+  } catch {
+    tzAbbrev = '';
+  }
+  return `${y}-${mo}-${da} ${h}:${mi}:${s}${tzAbbrev ? ` ${tzAbbrev}` : ''}`;
+}
+
+// Read startedAt from an existing meta.json on disk. Used by the finalizer to
+// preserve the true run-start time that the pre-seed writer captured, rather
+// than clobbering it with `new Date()` at finalize time.
+function readStartedAtFromMeta(metaPath: string): string | null {
+  try {
+    if (!existsSync(metaPath)) return null;
+    const raw = readFileSync(metaPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.startedAt === 'string') {
+      return parsed.startedAt;
+    }
+  } catch {
+    // Corrupt or unreadable pre-seed meta.json — fall through to RunState fallback.
+  }
+  return null;
+}
+
 // --- Agent staging (upstream-data dependencies) ---
 //
 // Agents are grouped into stages. A stage-N+1 agent may read findings /
@@ -1108,6 +1145,16 @@ async function finalizeRun(
       ? (caughtError instanceof Error ? caughtError.message : String(caughtError))
       : undefined;
 
+    // Preserve the true run-start time. The pre-seed meta.json written at
+    // run start holds the authoritative startedAt; carry it forward so
+    // duration-based analysis has real numbers instead of (completedAt === now).
+    const completedAtDate = new Date();
+    const startedAtIso = readStartedAtFromMeta(metaPath)
+      ?? (bag.runState ? new Date(bag.runState.getRunStartTime()).toISOString() : completedAtDate.toISOString());
+    const startedAtDate = new Date(startedAtIso);
+
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
     writeFileSync(metaPath, JSON.stringify({
       runId: config.runId,
       projectSlug: config.projectSlug,
@@ -1119,8 +1166,11 @@ async function finalizeRun(
       status,
       error: errorMessage,
       finalizationErrors: finalizationErrors.length > 0 ? finalizationErrors : undefined,
-      startedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
+      startedAt: startedAtIso,
+      completedAt: completedAtDate.toISOString(),
+      startedAtLocal: formatLocalTimestamp(startedAtDate),
+      completedAtLocal: formatLocalTimestamp(completedAtDate),
+      tz,
       dataClassification: modelsConfig.dataClassification,
       providers: { api: bag.apiAvail, cli: bag.cliAvail, disabled: bag.disabled },
       testability: bag.testabilityReport ? {

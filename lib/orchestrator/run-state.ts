@@ -115,6 +115,10 @@ export class RunState {
     this.totalFiles = count;
   }
 
+  getRunStartTime(): number {
+    return this.runStartTime;
+  }
+
   registerAgent(name: string): AgentRunStatus {
     const status: AgentRunStatus = {
       agentName: name,
