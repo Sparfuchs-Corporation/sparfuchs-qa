@@ -296,6 +296,20 @@ export function parseStreamJson(rawOutput: string): StreamJsonParseResult {
     ? finalResultText
     : assembled || finalResultText || '';
 
+  // Visibility: when the result event ships much less text than the deltas
+  // streamed (possible sign of a schema regression truncating the final
+  // message), log once. Behavior unchanged — longer text already wins above.
+  if (
+    finalResultText &&
+    finalResultText.length < assembled.length * 0.5 &&
+    assembled.length > 1_000
+  ) {
+    process.stderr.write(
+      `[stream-parser] finalResultText appears truncated: ` +
+      `${finalResultText.length} result bytes vs ${assembled.length} delta bytes\n`,
+    );
+  }
+
   return {
     text,
     toolCallLog,

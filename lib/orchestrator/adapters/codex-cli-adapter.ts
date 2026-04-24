@@ -10,6 +10,7 @@ import type {
   ToolCallLogEntry,
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
+import { detectAuthPrompt } from './shared-auth-check.js';
 
 export class CodexCliAdapter implements AgentAdapter {
   readonly name = 'codex-cli' as const;
@@ -80,6 +81,9 @@ export class CodexCliAdapter implements AgentAdapter {
       ];
       const execution = await spawnCli(this.binary, args, config.repoPath, combinedPrompt);
       const text = readFileSync(outputFile, 'utf8').trim();
+      // Silent-auth detection: codex exits 0 and writes the login prompt to
+      // stderr. Without this the orchestrator records a fake-success run.
+      detectAuthPrompt(text, execution.stderr);
 
       status.durationMs = Date.now() - startTime;
       status.tokenUsage.input = execution.usage.inputTokens;
@@ -117,6 +121,7 @@ function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
 interface CodexSpawnResult {
   usage: { inputTokens: number; outputTokens: number };
   toolCallLog: ToolCallLogEntry[];
+  stderr: string;
 }
 
 function spawnCli(
@@ -193,7 +198,7 @@ function spawnCli(
     });
 
     proc.on('close', (code) => {
-      if (code === 0) resolve({ usage, toolCallLog });
+      if (code === 0) resolve({ usage, toolCallLog, stderr });
       else reject(new Error(`${binary} exited with code ${code}: ${stderr.slice(0, 500)}`));
     });
 
