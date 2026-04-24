@@ -102,17 +102,23 @@ export class CoverageBabysitter {
   private readonly coveredByAgent = new Map<string, Set<string>>();
   private readonly strategy: CoverageStrategy;
   private readonly config: CoverageStrategyConfig;
+  // Repo root for mapping absolute paths back to relative in buildReport().
+  // Optional so existing 2-arg tests keep working; when unset, uncoveredFiles
+  // in the report fall back to absolute paths.
+  private readonly repoPath: string | null;
   private retriesExecuted = 0;
 
   constructor(
     allSourceFiles: string[],
     strategy: CoverageStrategy,
     config?: CoverageStrategyConfig,
+    repoPath?: string,
   ) {
     this.allFilesArray = allSourceFiles;
     this.allFiles = new Set(allSourceFiles);
     this.strategy = strategy;
     this.config = config ?? getStrategyConfig(strategy);
+    this.repoPath = repoPath ?? null;
   }
 
   /**
@@ -227,12 +233,18 @@ export class CoverageBabysitter {
   }
 
   /**
-   * Build the final coverage report.
+   * Build the final coverage report. uncoveredFiles is canonicalized to
+   * repo-relative paths when repoPath was provided — otherwise left absolute
+   * for backwards compatibility with tests that pass only 2-3 args.
    */
   buildReport(): CoverageReport {
-    const uncoveredFiles = this.allFilesArray
+    const rawUncovered = this.allFilesArray
       .filter(f => !this.coveredFiles.has(f))
       .sort();
+
+    const uncoveredFiles = this.repoPath
+      ? rawUncovered.map(f => relative(this.repoPath!, f))
+      : rawUncovered;
 
     const byAgent: CoverageReport['byAgent'] = [];
     for (const [agent, files] of this.coveredByAgent) {

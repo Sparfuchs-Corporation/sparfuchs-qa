@@ -246,7 +246,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   bag.chunkPlan = chunkPlan;
   const strategyConfig = getStrategyConfig(strategy);
   bag.strategyConfig = strategyConfig;
-  const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig);
+  const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig, config.repoPath);
   bag.babysitter = babysitter;
 
   // 6.1. Observability-level check for babysitting

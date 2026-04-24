@@ -110,6 +110,30 @@ describe('CoverageBabysitter', () => {
     });
   });
 
+  describe('buildReport — uncoveredFiles path format', () => {
+    it('emits absolute paths when repoPath is not provided', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+      ]);
+      const report = b.buildReport();
+      assert.ok(report.uncoveredFiles.every(f => f.startsWith('/')),
+        `expected all absolute, got: ${JSON.stringify(report.uncoveredFiles)}`);
+    });
+
+    it('emits repo-relative paths when repoPath is provided', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced', undefined, '/repo');
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+      ]);
+      const report = b.buildReport();
+      assert.ok(report.uncoveredFiles.every(f => !f.startsWith('/')),
+        `expected all relative, got: ${JSON.stringify(report.uncoveredFiles)}`);
+      assert.ok(report.uncoveredFiles.includes('src/auth/jwt-utils.ts'));
+      assert.ok(report.uncoveredFiles.includes('src/api/routes/users.ts'));
+    });
+  });
+
   describe('buildRetryPrompt — path sanitization', () => {
     it('should reject paths with control characters', () => {
       const b = new CoverageBabysitter(FILES, 'thorough');
