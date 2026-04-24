@@ -110,6 +110,43 @@ describe('CoverageBabysitter', () => {
     });
   });
 
+  describe('per-category counters (Phase 8)', () => {
+    it('findingsReadByAgent increments on findings/*.json reads', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('qa-gap-analyzer', [
+        makeLog('Read', { file_path: '/repo/qa-data/x/runs/y/findings/code-reviewer.json' }),
+        makeLog('Read', { file_path: '/repo/qa-data/x/runs/y/findings/security-reviewer.json' }),
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),  // not a findings file
+      ]);
+      assert.equal(b.getFindingsReadByAgent('qa-gap-analyzer'), 2);
+    });
+
+    it('probeCountByAgent increments on Bash/shell with URL-ish command', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('api-contract-prober', [
+        makeLog('Bash', { command: 'curl -s https://api.example.com/users' }),
+        makeLog('Bash', { command: 'curl -X POST https://api.example.com/users' }),
+        makeLog('Bash', { command: 'ls -la' }),  // not a probe
+      ]);
+      assert.equal(b.getProbeCountByAgent('api-contract-prober'), 2);
+    });
+
+    it('buildReport byAgent includes findingsReadCount + probeCount when non-zero', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('qa-gap-analyzer', [
+        makeLog('Read', { file_path: '/repo/qa-data/x/runs/y/findings/a.json' }),
+      ]);
+      b.recordAgentRun('api-contract-prober', [
+        makeLog('Bash', { command: 'curl https://api.example.com/' }),
+      ]);
+      const rep = b.buildReport();
+      const qa = rep.byAgent.find(r => r.agent === 'qa-gap-analyzer');
+      const probe = rep.byAgent.find(r => r.agent === 'api-contract-prober');
+      assert.equal(qa?.findingsReadCount, 1);
+      assert.equal(probe?.probeCount, 1);
+    });
+  });
+
   describe('getFilesExaminedByAgent', () => {
     it('returns the per-agent examined count (used by TTY Files column)', () => {
       const b = new CoverageBabysitter(FILES, 'balanced');

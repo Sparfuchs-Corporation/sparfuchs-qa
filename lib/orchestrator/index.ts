@@ -27,6 +27,7 @@ import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSu
 import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
 import { runPreflight, type PreflightReport } from './preflight.js';
 import { verifyRun } from './run-verifier.js';
+import { getAgentScope } from './agent-scopes.js';
 import {
   registerAdapter, resolveCliProviders, printCapabilityReport, getAdapter,
 } from './adapters/index.js';
@@ -655,23 +656,49 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         babysitter.recordAgentRun(agentLabel, cappedLog);
       }
 
-      // Populate filesAssigned + coveragePercent for the TTY Files column.
-      // Chunked agents get their chunk size as the denominator (how much
-      // they were asked to cover); unchunked agents get the full source
-      // file count. Either way, the examined count comes from the
-      // babysitter's per-agent coverage map.
+      // Category-aware Files column population. The previous "examined /
+      // 1297 source files" for every agent misled the operator when
+      // build-verifier (a shell-driven agent) looked like it examined 0%
+      // of the repo. Now each category renders appropriately.
       if (babysittingEnabled) {
         const examined = babysitter.getFilesExaminedByAgent(agentLabel);
+        const scope = agent.scopeCategory ?? getAgentScope(agent.name).category;
+
         if (chunk) {
+          // Chunked agents keep chunk-scoped rendering.
           const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
           status.coveragePercent = chunkEval.coveragePercent;
           status.filesAssigned = chunk.files.length;
-        } else {
-          const assigned = allSourceFiles.length;
+          status.filesDisplay = {
+            kind: 'chunked',
+            examined: Math.round((chunkEval.coveragePercent / 100) * chunk.files.length),
+            assigned: chunk.files.length,
+            percent: chunkEval.coveragePercent,
+          };
+        } else if (scope === 'pattern') {
+          // Pattern agents: denominator = files matching their glob set.
+          const agentScope = getAgentScope(agent.name);
+          const assigned = countPatternMatches(allSourceFiles, agentScope.patterns ?? []);
           status.filesAssigned = assigned;
-          status.coveragePercent = assigned > 0
-            ? Math.round((examined / assigned) * 100)
-            : 0;
+          status.coveragePercent = assigned > 0 ? Math.round((examined / assigned) * 100) : 0;
+          status.filesDisplay = {
+            kind: 'pattern',
+            examined,
+            assigned,
+            percent: status.coveragePercent,
+          };
+        } else if (scope === 'synthesis') {
+          const readCount = babysitter.getFindingsReadByAgent(agentLabel);
+          status.filesDisplay = { kind: 'synthesis', readCount };
+        } else if (scope === 'probe') {
+          const probeCount = babysitter.getProbeCountByAgent(agentLabel);
+          const label = getAgentScope(agent.name).probeLabel ?? 'probes';
+          status.filesDisplay = { kind: 'probe', probeCount, label };
+        } else if (scope === 'command') {
+          status.filesDisplay = { kind: 'command', examined };
+        } else {
+          // hybrid (or anything unclassified)
+          status.filesDisplay = { kind: 'hybrid', examined };
         }
       }
 
@@ -890,6 +917,34 @@ async function showConsentPrompt(providers: ProviderName[], repoPath: string): P
     : { repos: [] };
   existing.repos.push(repoPath);
   writeFileSync(consentFile, JSON.stringify(existing, null, 2));
+}
+
+// Count files from `allSourceFiles` that match any pattern in the given
+// list. Patterns are glob-ish: `**` matches any path segment, `*` matches
+// within one segment, and a trailing `/**` matches a directory subtree.
+// Used by Phase 8 to compute the Files-column denominator for
+// pattern-scoped agents (rbac-reviewer, api-spec-reviewer, etc.).
+function countPatternMatches(allFiles: readonly string[], patterns: readonly string[]): number {
+  if (patterns.length === 0) return 0;
+  const regexes = patterns.map(patternToRegex);
+  let count = 0;
+  for (const f of allFiles) {
+    for (const r of regexes) {
+      if (r.test(f)) { count++; break; }
+    }
+  }
+  return count;
+}
+
+function patternToRegex(pattern: string): RegExp {
+  // Escape regex specials except glob markers, then translate glob tokens.
+  const escaped = pattern
+    .replace(/[.+^$()|[\]{}]/g, '\\$&')
+    .replace(/\*\*/g, '\x00')                    // placeholder
+    .replace(/\*/g, '[^/]*')
+    .replace(/\x00/g, '.*')
+    .replace(/\?/g, '.');
+  return new RegExp(`(^|/)${escaped}$`);
 }
 
 function formatTime(): string {

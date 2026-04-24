@@ -115,7 +115,7 @@ describe('verifyRun', () => {
       assert.ok(report);
       const t = report.checks.find(c => c.id === 'per-agent-telemetry');
       assert.equal(t?.status, 'fail');
-      assert.ok(t?.cause?.includes('zero file access'));
+      assert.ok(t?.cause?.includes('zero work signal'));
     } finally { cleanup(); }
   });
 
@@ -136,6 +136,47 @@ describe('verifyRun', () => {
       const t = report.checks.find(c => c.id === 'light-mid-no-timeouts');
       assert.equal(t?.status, 'fail');
       assert.ok(t?.remediation?.includes('heavy tier'));
+    } finally { cleanup(); }
+  });
+
+  it('per-agent telemetry check credits synthesis agents with findingsReadCount > 0', () => {
+    const { runDir, cleanup } = setup({
+      'preflight.json': MINIMAL_PREFLIGHT,
+      'meta.json': { agents: [{ name: 'qa-gap-analyzer', status: 'complete' }] },
+      'coverage-report.json': {
+        actualPercent: 60, totalFiles: 100, uncoveredFiles: [],
+        byAgent: [
+          // Synthesis agent: 0 files examined but 12 findings JSON files read
+          { agent: 'qa-gap-analyzer', filesExamined: 0, findingsReadCount: 12 },
+        ],
+      },
+      'findings-final.json': Array.from({ length: 5 }, (_, i) => ({ severity: 'low', rule: `r${i}` })),
+    });
+    try {
+      const report = verifyRun({ runDir, projectSlug: 'test', runId: 'qa-test' });
+      assert.ok(report);
+      const t = report.checks.find(c => c.id === 'per-agent-telemetry');
+      assert.equal(t?.status, 'pass', `synthesis agent with findingsReadCount>0 should pass, got ${JSON.stringify(t)}`);
+    } finally { cleanup(); }
+  });
+
+  it('per-agent telemetry check credits probe agents with probeCount > 0', () => {
+    const { runDir, cleanup } = setup({
+      'preflight.json': MINIMAL_PREFLIGHT,
+      'meta.json': { agents: [{ name: 'api-contract-prober', status: 'complete' }] },
+      'coverage-report.json': {
+        actualPercent: 60, totalFiles: 100, uncoveredFiles: [],
+        byAgent: [
+          { agent: 'api-contract-prober', filesExamined: 0, probeCount: 15 },
+        ],
+      },
+      'findings-final.json': Array.from({ length: 5 }, (_, i) => ({ severity: 'low', rule: `r${i}` })),
+    });
+    try {
+      const report = verifyRun({ runDir, projectSlug: 'test', runId: 'qa-test' });
+      assert.ok(report);
+      const t = report.checks.find(c => c.id === 'per-agent-telemetry');
+      assert.equal(t?.status, 'pass');
     } finally { cleanup(); }
   });
 

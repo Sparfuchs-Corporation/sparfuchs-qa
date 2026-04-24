@@ -71,20 +71,26 @@ export function verifyRun(input: VerifyRunInput): RunQualityReport | null {
       : undefined,
   });
 
-  // Per-agent telemetry
+  // Per-agent telemetry. Category-aware: synthesis agents (qa-gap-analyzer,
+  // release-gate-synthesizer) read findings JSON not source files — credit
+  // them via findingsReadCount. Probe agents credit via probeCount.
   const byAgent = Array.isArray(coverage?.byAgent) ? coverage.byAgent as Record<string, unknown>[] : [];
-  const zeroAgents = byAgent.filter(r => asNumber(r.filesExamined) === 0).map(r => String(r.agent));
+  const hasAnyCategorySignal = (r: Record<string, unknown>): boolean =>
+    (asNumber(r.filesExamined) ?? 0) > 0 ||
+    (asNumber(r.findingsReadCount) ?? 0) > 0 ||
+    (asNumber(r.probeCount) ?? 0) > 0;
+  const zeroAgents = byAgent.filter(r => !hasAnyCategorySignal(r)).map(r => String(r.agent));
   const agentCountInMeta = Array.isArray(meta?.agents) ? (meta!.agents as unknown[]).length : 0;
-  const agentsReportingFiles = byAgent.filter(r => (asNumber(r.filesExamined) ?? 0) > 0).length;
+  const agentsReportingFiles = byAgent.filter(hasAnyCategorySignal).length;
   checks.push({
     id: 'per-agent-telemetry',
     status: agentCountInMeta === 0
       ? 'skip'
       : (zeroAgents.length === 0 && agentsReportingFiles > 0 ? 'pass' : 'fail'),
-    observed: `${agentsReportingFiles} / ${agentCountInMeta} reporting filesExamined > 0`,
-    expected: '>0 per agent (any adapter)',
+    observed: `${agentsReportingFiles} / ${agentCountInMeta} reporting any work signal (files/probes/synthesis)`,
+    expected: '>0 per agent (files, probes, or synthesis reads)',
     cause: zeroAgents.length > 0
-      ? `${zeroAgents.length} agents reported zero file access: ${zeroAgents.slice(0, 5).join(', ')}${zeroAgents.length > 5 ? '…' : ''}`
+      ? `${zeroAgents.length} agents reported zero work signal: ${zeroAgents.slice(0, 5).join(', ')}${zeroAgents.length > 5 ? '…' : ''}`
       : undefined,
     remediation: zeroAgents.length > 0
       ? 'confirm the universal extractToolCallsFromText fallback in agent-runner is running (stderr "recovered N entries" log), and verify adapters emit tool_use events'

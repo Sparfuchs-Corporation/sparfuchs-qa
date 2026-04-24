@@ -75,6 +75,16 @@ export function parseAgentFile(
   const agentOverride = overrides[name] ?? {};
   const disableBash = agentOverride.disableBash ?? false;
 
+  // Work-category can be declared in frontmatter `scope_category:`. When
+  // absent, falls back to AGENT_SCOPES lookup at render time. Validate
+  // the value if present; silently drop unknown values rather than erroring
+  // (so an agent with a typo doesn't block the whole run).
+  const rawScope = frontmatter.scope_category as string | undefined;
+  const validCategories = ['chunked', 'pattern', 'command', 'synthesis', 'probe', 'hybrid'] as const;
+  const scopeCategory = rawScope && (validCategories as readonly string[]).includes(rawScope)
+    ? (rawScope as AgentDefinition['scopeCategory'])
+    : undefined;
+
   return {
     name,
     description: (frontmatter.description as string) ?? '',
@@ -85,6 +95,7 @@ export function parseAgentFile(
     sourcePath: filePath,
     contentHash: hash,
     timeoutMs: agentOverride.timeoutMs,
+    scopeCategory,
   };
 }
 
