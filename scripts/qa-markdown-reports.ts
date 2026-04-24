@@ -166,6 +166,36 @@ export function generateQaReport(input: GenerateQaReportInput): void {
   }
   lines.push('');
 
+  // Run-quality labeling (Phase 3). Prepends a PARTIAL / PASS block above
+  // the Release-Gate Verdict so the operator sees honest signal before
+  // severity-based ship/block guidance. Adjacent to — not overriding —
+  // the release gate.
+  const runQuality = loadJson<{
+    passed: number; failed: number; total: number; passRatePercent: number;
+    partialRun: boolean; checks: Array<{ id: string; status: string; observed: unknown; expected: string }>;
+  }>(join(input.runDir, 'run-quality.json'));
+  if (runQuality) {
+    if (runQuality.partialRun) {
+      lines.push(`## Run Quality — PARTIAL`);
+      lines.push('');
+      lines.push(
+        `This was a **partial** run. ${runQuality.failed} of ${runQuality.total} ` +
+        `preflight criteria missed (${runQuality.passRatePercent}% pass rate).`,
+      );
+      lines.push('');
+      for (const c of runQuality.checks) {
+        if (c.status !== 'fail') continue;
+        lines.push(`- **${c.id}**: observed \`${c.observed}\`, expected \`${c.expected}\``);
+      }
+      lines.push('');
+      lines.push('**See qa-gaps.md § Run Quality Deficit for causes and remediation.**');
+      lines.push('');
+    } else {
+      lines.push(`## Run Quality — PASS (${runQuality.passed}/${runQuality.total} criteria)`);
+      lines.push('');
+    }
+  }
+
   // Fold in release-gate-synthesizer verdict if available.
   const gateOutput = readIfExists(findAgentSessionLog(input.sessionLogDir, 'release-gate-synthesizer'));
   if (gateOutput) {
@@ -461,6 +491,34 @@ export function generateQaGaps(input: GenerateQaGapsInput): void {
   lines.push('');
   lines.push(`**Run**: ${input.runId}`);
   lines.push('');
+
+  // Run Quality Deficit (Phase 3). Leads the document when the preflight's
+  // scale-adaptive expectations weren't met — failed checks with cause +
+  // remediation strings come straight from run-verifier.
+  const runQuality = loadJson<{
+    passed: number; failed: number; total: number;
+    checks: Array<{ id: string; status: string; observed: unknown; expected: string; cause?: string; remediation?: string }>;
+  }>(join(input.runDir, 'run-quality.json'));
+  if (runQuality && runQuality.failed > 0) {
+    lines.push('## Run Quality Deficit');
+    lines.push('');
+    lines.push(
+      `${runQuality.failed} of ${runQuality.total} preflight criteria missed. ` +
+      'Each failing check below names what was observed, what was expected, ' +
+      'and — where the pattern is known — a concrete remediation.',
+    );
+    lines.push('');
+    for (const c of runQuality.checks) {
+      if (c.status !== 'fail') continue;
+      lines.push(`### ${c.id}`);
+      lines.push('');
+      lines.push(`- **Observed**: \`${String(c.observed)}\``);
+      lines.push(`- **Expected**: \`${c.expected}\``);
+      if (c.cause) lines.push(`- **Cause**: ${c.cause}`);
+      if (c.remediation) lines.push(`- **Remediation**: ${c.remediation}`);
+      lines.push('');
+    }
+  }
 
   if (analyzerOutput) {
     lines.push(analyzerOutput.trim());

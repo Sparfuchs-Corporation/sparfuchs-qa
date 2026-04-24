@@ -26,6 +26,7 @@ import {
 import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
 import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
 import { runPreflight, type PreflightReport } from './preflight.js';
+import { verifyRun } from './run-verifier.js';
 import {
   registerAdapter, resolveCliProviders, printCapabilityReport, getAdapter,
 } from './adapters/index.js';
@@ -1289,6 +1290,18 @@ async function finalizeRun(
       fallbackEvents: bag.runState?.getFallbackEvents() ?? [],
       qualityAudit: bag.auditor?.getResults() ?? [],
     }, null, 2));
+  });
+
+  // 9.5. Run quality verification — grade actual run artifacts against the
+  //      preflight's scale-adaptive expectations. Produces run-quality.json.
+  //      Phase 3 partial-run labeling in qa-report.md and qa-gaps.md reads
+  //      this file. Does not override the release-gate verdict.
+  await runStep('verifyRun', () => {
+    verifyRun({
+      runDir,
+      projectSlug: config.projectSlug,
+      runId: config.runId,
+    });
   });
 
   // 10. Human-facing markdown reports — documented exception to the JSON-only
