@@ -43,10 +43,20 @@ async function main(): Promise<void> {
   const mode = (args['mode'] ?? 'full') as OrchestrationConfig['mode'];
   const provider = args['provider'] as ProviderName | undefined;
   const userPrompt = args['user-prompt'] ?? `Run a QA review for this repository.`;
-  const moduleScope = args['module'];
-  const selectedAgents = args['selected-agents']
-    ? args['selected-agents'].split(',').map(s => s.trim()).filter(Boolean)
-    : undefined;
+  // MODULE env knob: restrict discovery to a subpath (e.g., libs/shared).
+  // Used by preflight's fail+script mode to target gap-healing runs at a
+  // single under-covered directory.
+  const moduleScope = args['module'] ?? process.env.MODULE ?? undefined;
+  // AGENT_ONLY env knob: narrow the agent roster to a single name. Used
+  // by preflight's fail+script mode to re-run e.g. a timed-out agent on a
+  // longer per-agent budget without re-dispatching the whole wave.
+  const agentOnly = process.env.AGENT_ONLY?.trim();
+  const selectedAgentsRaw = args['selected-agents'];
+  const selectedAgents = agentOnly
+    ? [agentOnly]
+    : selectedAgentsRaw
+      ? selectedAgentsRaw.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined;
   const composeRules = args['compose-rules'] === 'true' || process.env.COMPOSE_RULES === 'true';
   const autoComplete = args['auto-complete'] === 'true' || process.env.QA_AUTO_COMPLETE === 'true';
   const baseline = args['baseline'] === 'true' || process.env.QA_BASELINE === 'true';

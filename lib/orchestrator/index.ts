@@ -25,6 +25,7 @@ import {
 } from '../../scripts/qa-markdown-reports.js';
 import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
 import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
+import { runPreflight, type PreflightReport } from './preflight.js';
 import {
   registerAdapter, resolveCliProviders, printCapabilityReport, getAdapter,
 } from './adapters/index.js';
@@ -249,6 +250,28 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig, config.repoPath);
   bag.babysitter = babysitter;
 
+  // 6.0. Preflight gate — repo census, plan preview, scale-derived success
+  // criteria, prior-run gap detection, and the 3-way gap-healing choice
+  // (auto-heal / report / fail+script). Runs interactively unless
+  // QA_PREFLIGHT=skip is set. Produces preflight.json for Phase 3's
+  // run-verifier to grade the actual run against.
+  const preflightReport = await runPreflight({
+    config,
+    agents,
+    allSourceFiles,
+    chunkPlan,
+    strategy,
+    targetCoveragePercent: strategyConfig.targetCoveragePercent,
+    runDir,
+    testabilityCheckabilityPercent: testabilityReport.uncheckable.checkabilityScore,
+    testabilityUncheckableCount: testabilityReport.uncheckable.totalUncheckable,
+  });
+  bag.preflightReport = preflightReport;
+  if (!preflightReport.proceed) {
+    process.stderr.write('\n[preflight] aborted by user — no agents dispatched.\n');
+    return;
+  }
+
   // 6.1. Observability-level check for babysitting
   // Find the best observability level across all available providers.
   let babysittingEnabled = true;
@@ -398,6 +421,23 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       const label = chunk ? `${agent.name}-chunk-${chunk.id}` : agent.name;
       jobs.push({ agent, chunk, label });
     }
+  }
+
+  // 8.5. Gap-healing jobs (preflight option 1 — auto-heal). Runs alongside
+  // the main wave with a `-heal` label suffix so findings and session logs
+  // don't clobber the primary agent's output. Tier escalation comes from
+  // config/models.yaml.agentOverrides (doc-reviewer / sca-reviewer →
+  // heavy) so no extra plumbing is needed here.
+  if (preflightReport.healJobs.length > 0) {
+    for (const healJob of preflightReport.healJobs) {
+      const agent = agents.find(a => a.name === healJob.agentName);
+      if (!agent) continue;
+      jobs.push({ agent, chunk: null, label: `${agent.name}-heal` });
+    }
+    process.stderr.write(
+      `\n[preflight] injected ${preflightReport.healJobs.length} heal job(s): ` +
+      `${preflightReport.healJobs.map(j => j.agentName).join(', ')}\n`,
+    );
   }
 
   // Scheduling: primary key is stage (upstream-data dependencies between
@@ -1039,6 +1079,7 @@ interface FinalizerBag {
   dashboard?: DashboardController;
   ttyRenderer?: TtyRenderer;
   auditor?: QualityAuditor;
+  preflightReport?: PreflightReport;
 }
 
 // Write stub findings + handoff JSON for an agent that failed (timeout or
