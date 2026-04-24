@@ -36,14 +36,20 @@ function isServerError(err: unknown): boolean {
  * Matches Gemini CLI's `TerminalQuotaError`, plus prose variants from
  * other providers ("you have exhausted", "quota exceeded", etc.).
  */
-function isQuotaError(err: unknown): boolean {
+export function isQuotaError(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message;
   return (
     msg.includes('TerminalQuotaError') ||
     msg.includes('exhausted your capacity') ||
     /quota\s+(exceeded|exhausted|will\s+reset)/i.test(msg) ||
-    /RESOURCE_EXHAUSTED/i.test(msg)
+    /RESOURCE_EXHAUSTED/i.test(msg) ||
+    // Codex CLI: "You've hit your usage limit. ... try again at <time>."
+    /hit your usage limit/i.test(msg) ||
+    /usage limit.*try again/i.test(msg) ||
+    // Generic OpenAI/Anthropic phrasings we might see from future adapters.
+    /You (?:have )?exceeded your (?:current )?quota/i.test(msg) ||
+    /insufficient_quota/i.test(msg)
   );
 }
 

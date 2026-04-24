@@ -140,6 +140,11 @@ function spawnCli(
     let stderr = '';
     let usage = { inputTokens: 0, outputTokens: 0 };
     const toolCallLog: ToolCallLogEntry[] = [];
+    // Codex writes rate-limit / quota errors to stdout as JSON events
+    // (type: 'error' / 'turn.failed'), not stderr. Capture the last such
+    // message so the reject below can surface it instead of an empty
+    // "exited with code 1:" string.
+    let stdoutErrorMsg = '';
 
     proc.stdout.on('data', (data: Buffer) => {
       const chunk = data.toString();
@@ -148,6 +153,15 @@ function spawnCli(
         if (!trimmed) continue;
         try {
           const event = JSON.parse(trimmed) as Record<string, unknown>;
+
+          // Capture error / turn.failed messages for non-zero exit reports.
+          if (event.type === 'error' && typeof event.message === 'string') {
+            stdoutErrorMsg = event.message;
+          }
+          if (event.type === 'turn.failed') {
+            const errObj = event.error as { message?: string } | undefined;
+            if (errObj?.message) stdoutErrorMsg = errObj.message;
+          }
 
           // Extract token usage from turn.completed events
           if (event.type === 'turn.completed') {
@@ -198,8 +212,14 @@ function spawnCli(
     });
 
     proc.on('close', (code) => {
-      if (code === 0) resolve({ usage, toolCallLog, stderr });
-      else reject(new Error(`${binary} exited with code ${code}: ${stderr.slice(0, 500)}`));
+      if (code === 0) {
+        resolve({ usage, toolCallLog, stderr });
+        return;
+      }
+      // Prefer the stdout error message (Codex's rate-limit / quota messages
+      // arrive there), fall back to stderr, then to a bare exit-code string.
+      const detail = stdoutErrorMsg || stderr.slice(0, 500) || '(no stdout/stderr captured)';
+      reject(new Error(`${binary} exited with code ${code}: ${detail}`));
     });
 
     proc.on('error', (err) => {
