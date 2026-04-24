@@ -961,7 +961,10 @@ const AGENT_STAGES: Record<string, number> = {
   'spec-verifier': 1,
   'ui-intent-verifier': 1,
   'stub-detector': 1,
+  'python-linter': 1,          // project Python static analysis — independent
+  'cost-analyzer': 1,          // infra cost surface — independent
   // Stage 2
+  'iam-drift-auditor': 2,      // reads IAM from every layer; benefits from other stage-1 outputs
   'schema-migration-reviewer': 2,
   'mock-integrity-checker': 2,
   'environment-parity-checker': 2,

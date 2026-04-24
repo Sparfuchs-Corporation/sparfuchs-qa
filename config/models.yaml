@@ -118,6 +118,15 @@ agentOverrides:
   sca-reviewer:
     tier: heavy
 
+  # New agents from qa-gap-analyzer recommendations (Phase 6).
+  python-linter:
+    provider: xai          # honesty bias favors minimal-hallucination static analysis
+  cost-analyzer:
+    provider: anthropic    # Opus for nuanced tradeoff reasoning on infra spend
+  iam-drift-auditor:
+    provider: xai
+    maxSteps: 75           # reads across Firestore + Python + TS + OpenAPI; needs steps
+
 # --- Token Budget ---
 # Controls cost estimation and budget presets.
 # CLI providers manage billing through their own accounts — shown as informational.
