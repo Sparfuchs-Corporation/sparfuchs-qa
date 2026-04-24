@@ -272,6 +272,7 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
     runDir,
     testabilityCheckabilityPercent: testabilityReport.uncheckable.checkabilityScore,
     testabilityUncheckableCount: testabilityReport.uncheckable.totalUncheckable,
+    agentsToSkip,
   });
   bag.preflightReport = preflightReport;
   if (!preflightReport.proceed) {

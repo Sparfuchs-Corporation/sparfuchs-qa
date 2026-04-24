@@ -377,9 +377,16 @@ export class CoverageBabysitter {
     return paths;
   }
 
+  // Resolve a tool-call file-path arg to its absolute form. When repoPath was
+  // provided at construction, use it as the base — CLI adapters (Gemini,
+  // Codex, Claude) run child processes with cwd=repoPath, so their tool_use
+  // events often emit paths relative to the target repo, not the parent
+  // orchestrator's cwd. Without this, Set.has() lookups against allFiles
+  // (absolute paths rooted at repoPath) silently miss and coveredFiles
+  // stays empty — the bug that froze the TTY at "0 / N files (0%)".
   private normalizePath(filePath: string): string {
     try {
-      return resolve(filePath);
+      return this.repoPath ? resolve(this.repoPath, filePath) : resolve(filePath);
     } catch {
       return filePath;
     }

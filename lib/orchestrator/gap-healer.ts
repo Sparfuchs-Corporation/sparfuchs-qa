@@ -37,6 +37,11 @@ export interface BuildGapHealingPlanInput {
   priorCoveragePath: string | null;
   currentAgents: readonly string[];
   currentSourceFiles: readonly string[];
+  // Agents the current run intentionally skips (e.g., testability-scanner's
+  // predictAgentEffectiveness produced "no DB schemas → skip schema-migration
+  // -reviewer"). Heal jobs for these would be wasted and flagged entries
+  // mislead the operator. Drop them from gaps and jobs alike.
+  agentsToSkip?: ReadonlySet<string>;
 }
 
 export interface GapHealingPlan {
@@ -51,6 +56,7 @@ export function buildGapHealingPlan(input: BuildGapHealingPlanInput): GapHealing
   const priorCoverage = input.priorCoveragePath ? loadJson<Record<string, unknown>>(input.priorCoveragePath) : null;
 
   const currentAgents = new Set(input.currentAgents);
+  const skipSet = input.agentsToSkip ?? new Set<string>();
   const gaps: CarryoverGap[] = [];
   const jobs: GapHealingJob[] = [];
 
@@ -60,6 +66,7 @@ export function buildGapHealingPlan(input: BuildGapHealingPlanInput): GapHealing
     if (a.status !== 'failed') continue;
     const name = (a.name ?? a.agentName) as string | undefined;
     if (!name || !currentAgents.has(name)) continue;
+    if (skipSet.has(name)) continue;  // skipped this run — heal would also skip
     const errMsg = (a.error as string | undefined) ?? 'unknown error';
     const isTimeout = /exceeded \d+s hard timeout/.test(errMsg);
     gaps.push({
@@ -82,12 +89,15 @@ export function buildGapHealingPlan(input: BuildGapHealingPlanInput): GapHealing
 
   // --- per-agent coverage shortfall ---
   if (priorCoverage) {
-    const priorTotal = typeof priorCoverage.totalFiles === 'number' ? priorCoverage.totalFiles : 0;
     const byAgent = Array.isArray(priorCoverage.byAgent) ? priorCoverage.byAgent as Record<string, unknown>[] : [];
-    const minFiles = Math.floor(Math.max(priorTotal, input.currentSourceFiles.length) * MIN_PER_AGENT_COVERAGE_RATIO);
+    // Threshold against the CURRENT source count only. Using max(prior,
+    // current) produced impossible targets (e.g. 2352 on a 1,297-file repo
+    // when the prior run was polluted with 7,840 .venv files).
+    const minFiles = Math.floor(input.currentSourceFiles.length * MIN_PER_AGENT_COVERAGE_RATIO);
     for (const row of byAgent) {
       const name = row.agent as string | undefined;
       if (!name || !currentAgents.has(name)) continue;
+      if (skipSet.has(name)) continue;  // skipped this run
       const examined = typeof row.filesExamined === 'number' ? row.filesExamined : 0;
       if (examined >= minFiles) continue;
       // Skip if the agent already showed up in failed-agent jobs — we'll
@@ -97,7 +107,7 @@ export function buildGapHealingPlan(input: BuildGapHealingPlanInput): GapHealing
         type: 'agent-coverage-shortfall',
         agentName: name,
         description: `${name} saw only ${examined} files last run (< 30% of ${input.currentSourceFiles.length})`,
-        suggestedRemediation: `targeted re-dispatch to raise coverage above ${minFiles}`,
+        suggestedRemediation: `targeted re-dispatch to raise coverage above ${minFiles} (30% of ${input.currentSourceFiles.length})`,
       });
       jobs.push({
         agentName: name,

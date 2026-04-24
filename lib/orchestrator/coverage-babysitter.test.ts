@@ -110,6 +110,30 @@ describe('CoverageBabysitter', () => {
     });
   });
 
+  describe('normalizePath — resolves against repoPath', () => {
+    it('resolves relative tool-call paths against repoPath (not process.cwd)', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced', undefined, '/repo');
+      // Gemini CLI child processes run with cwd=config.repoPath, so their
+      // tool_use events often emit relative args (e.g. "src/auth/middleware.ts").
+      b.recordAgentRun('code-reviewer', [
+        makeLog('read_file', { file_path: 'src/auth/middleware.ts' }),
+      ]);
+      assert.ok(
+        b.getFilesExamined().has('/repo/src/auth/middleware.ts'),
+        `expected /repo/src/auth/middleware.ts in ${JSON.stringify([...b.getFilesExamined()])}`,
+      );
+    });
+
+    it('falls back to process.cwd resolution when repoPath is absent (2-arg ctor)', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      // With no repoPath, absolute paths still work.
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+      ]);
+      assert.ok(b.getFilesExamined().has('/repo/src/auth/middleware.ts'));
+    });
+  });
+
   describe('buildReport — uncoveredFiles path format', () => {
     it('emits absolute paths when repoPath is not provided', () => {
       const b = new CoverageBabysitter(FILES, 'balanced');

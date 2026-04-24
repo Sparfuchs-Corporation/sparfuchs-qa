@@ -82,6 +82,11 @@ export interface PreflightInput {
   runDir: string;
   testabilityCheckabilityPercent: number;
   testabilityUncheckableCount: number;
+  // Agents the testability-scanner marked as ineffective for this repo
+  // (e.g., no React → skip a11y-reviewer). gap-healer filters gaps that
+  // name one of these so the operator doesn't see "heal schema-migration-
+  // reviewer" for a repo with no DB schemas.
+  agentsToSkip?: ReadonlySet<string>;
 }
 
 // --- Execute ---
@@ -97,6 +102,7 @@ export async function runPreflight(input: PreflightInput): Promise<PreflightRepo
     priorCoveragePath: coveragePath,
     currentAgents: input.agents.map(a => a.name),
     currentSourceFiles: input.allSourceFiles,
+    agentsToSkip: input.agentsToSkip,
   });
 
   const report: PreflightReport = {

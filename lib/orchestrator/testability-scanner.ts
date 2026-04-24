@@ -465,13 +465,6 @@ function predictAgentEffectiveness(
         : 'No frontend framework detected — agent analyzes JSX/TSX UI elements',
     },
     {
-      agent: 'stale-closure',
-      effective: hasTS && hasFrontend,
-      reason: hasTS && hasFrontend
-        ? 'React/Vue with hooks detected'
-        : 'No React/Vue hooks — stale closure checks not applicable',
-    },
-    {
       agent: 'test-runner',
       effective: testInfra.hasTestFramework,
       reason: testInfra.hasTestFramework
@@ -591,7 +584,7 @@ function generateRecommendations(
       priority: 'medium',
       category: 'agent-config',
       title: `Only ${tsPercentage}% TypeScript/JavaScript`,
-      description: 'Several agents (ui-intent-verifier, stale-closure, i18n-missing-key) are optimized for JS/TS. Non-JS/TS code relies primarily on code-reviewer and security-reviewer.',
+      description: 'Several agents (ui-intent-verifier, i18n-missing-key) are optimized for JS/TS. Non-JS/TS code relies primarily on code-reviewer and security-reviewer.',
       action: 'Review agent skip predictions in testability report for language-specific gaps.',
     });
   }

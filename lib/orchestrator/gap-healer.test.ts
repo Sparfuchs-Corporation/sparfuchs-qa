@@ -100,6 +100,46 @@ describe('buildGapHealingPlan', () => {
     } finally { cleanup(); }
   });
 
+  it('threshold uses currentSourceFiles.length only, not max(prior, current)', () => {
+    const { metaPath, coveragePath, cleanup } = seed(
+      { agents: [] },
+      {
+        totalFiles: 7840,  // prior was polluted with .venv — this would blow the threshold
+        byAgent: [{ agent: 'code-reviewer', filesExamined: 400 }],
+      },
+    );
+    try {
+      // Current repo has 1000 files; 30% = 300. 400 examined last run should
+      // NOT be flagged. (With the old max(prior,current) bug, the threshold
+      // would be floor(7840 * 0.30) = 2352, triggering a false shortfall.)
+      const plan = buildGapHealingPlan({
+        priorMetaPath: metaPath,
+        priorCoveragePath: coveragePath,
+        currentAgents: ['code-reviewer'],
+        currentSourceFiles: Array.from({ length: 1000 }, (_, i) => `/repo/f${i}.ts`),
+      });
+      assert.equal(plan.gaps.length, 0, 'no shortfall should be flagged when examined >= 30% of current source');
+    } finally { cleanup(); }
+  });
+
+  it('filters gaps for agents in agentsToSkip', () => {
+    const { metaPath, coveragePath, cleanup } = seed(
+      { agents: [{ name: 'a11y-reviewer', status: 'failed', error: 'exceeded 480s hard timeout' }] },
+      { totalFiles: 100, byAgent: [{ agent: 'schema-migration-reviewer', filesExamined: 0 }] },
+    );
+    try {
+      const plan = buildGapHealingPlan({
+        priorMetaPath: metaPath,
+        priorCoveragePath: coveragePath,
+        currentAgents: ['a11y-reviewer', 'schema-migration-reviewer'],
+        currentSourceFiles: Array.from({ length: 100 }, (_, i) => `/repo/f${i}.ts`),
+        agentsToSkip: new Set(['a11y-reviewer', 'schema-migration-reviewer']),
+      });
+      assert.equal(plan.gaps.length, 0, 'skipped agents produce no gaps');
+      assert.equal(plan.jobs.length, 0, 'skipped agents produce no heal jobs');
+    } finally { cleanup(); }
+  });
+
   it('does not double-schedule an agent that is both failed and under-covered', () => {
     const { metaPath, coveragePath, cleanup } = seed(
       { agents: [{ name: 'code-reviewer', status: 'failed', error: 'exceeded 480s hard timeout' }] },

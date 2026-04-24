@@ -147,10 +147,13 @@ export function verifyRun(input: VerifyRunInput): RunQualityReport | null {
       : undefined,
   });
 
-  // Prior-run gaps healed (only when carryoverGaps existed)
+  // Prior-run gaps healed (only when carryoverGaps existed).
+  // Heal jobs dispatch with label `<agent>-heal` to avoid clobbering the
+  // primary agent's session log, so coverage-report.json records them under
+  // that suffixed key. Match either name so the check credits both paths.
   if (preflight.healJobs.length > 0) {
     const healed = preflight.healJobs.filter(j => {
-      const row = byAgent.find(r => r.agent === j.agentName);
+      const row = byAgent.find(r => r.agent === j.agentName || r.agent === `${j.agentName}-heal`);
       return !!row && (asNumber(row.filesExamined) ?? 0) > 0;
     });
     checks.push({

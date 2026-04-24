@@ -139,6 +139,31 @@ describe('verifyRun', () => {
     } finally { cleanup(); }
   });
 
+  it('prior-gaps-healed check credits heal jobs recorded under <agent>-heal', () => {
+    const withHealJobs = {
+      ...MINIMAL_PREFLIGHT,
+      healJobs: [{ agentName: 'doc-reviewer', kind: 'heal' as const, reason: 'prior timeout' }],
+    };
+    const { runDir, cleanup } = setup({
+      'preflight.json': withHealJobs,
+      'meta.json': { agents: [] },
+      'coverage-report.json': {
+        actualPercent: 60, totalFiles: 100, uncoveredFiles: [],
+        byAgent: [
+          { agent: 'code-reviewer', filesExamined: 60 },
+          { agent: 'doc-reviewer-heal', filesExamined: 40 },  // heal-suffixed key
+        ],
+      },
+      'findings-final.json': Array.from({ length: 5 }, (_, i) => ({ severity: 'low', rule: `r${i}` })),
+    });
+    try {
+      const report = verifyRun({ runDir, projectSlug: 'test', runId: 'qa-test' });
+      assert.ok(report);
+      const healed = report.checks.find(c => c.id === 'prior-gaps-healed');
+      assert.equal(healed?.status, 'pass', `expected pass, got ${JSON.stringify(healed)}`);
+    } finally { cleanup(); }
+  });
+
   it('writes run-quality.json with checks array', () => {
     const { runDir, cleanup } = setup({
       'preflight.json': MINIMAL_PREFLIGHT,
