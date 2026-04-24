@@ -66,6 +66,39 @@ interface ResultEvent {
   model?: string;
   // Claude CLI result may include usage
   usage?: { input_tokens?: number; output_tokens?: number };
+  // Gemini CLI result packs token counts under .stats instead of .usage
+  stats?: {
+    total_tokens?: number;
+    input_tokens?: number;
+    output_tokens?: number;
+    cached?: number;
+  };
+}
+
+// Gemini CLI emits top-level tool_use events (not nested in content blocks).
+interface GeminiToolUseEvent {
+  type: 'tool_use';
+  tool_name?: string;
+  name?: string;
+  tool_id?: string;
+  parameters?: Record<string, unknown>;
+  input?: Record<string, unknown>;
+}
+
+// Gemini CLI emits top-level message events with role + content string.
+// Assistant messages may stream as many {delta:true} chunks ending with a
+// non-delta final; we concatenate all assistant content parts in order.
+interface GeminiMessageEvent {
+  type: 'message';
+  role?: string;
+  content?: string;
+  delta?: boolean;
+}
+
+interface GeminiInitEvent {
+  type: 'init';
+  model?: string;
+  session_id?: string;
 }
 
 type StreamEvent =
@@ -74,6 +107,9 @@ type StreamEvent =
   | ContentBlockDeltaEvent
   | { type: 'content_block_stop' }
   | ResultEvent
+  | GeminiToolUseEvent
+  | GeminiMessageEvent
+  | GeminiInitEvent
   | { type: string; [key: string]: unknown };
 
 /**
@@ -201,6 +237,50 @@ export function parseStreamJson(rawOutput: string): StreamJsonParseResult {
         if (resultEvent.model) model = resultEvent.model;
         if (resultEvent.usage) {
           usage = mergeUsage(usage, resultEvent.usage);
+        } else if (resultEvent.stats) {
+          // Gemini CLI: token counts live under .stats, not .usage.
+          usage = mergeUsage(usage, {
+            input_tokens: resultEvent.stats.input_tokens,
+            output_tokens: resultEvent.stats.output_tokens,
+          });
+        }
+        break;
+      }
+
+      case 'init': {
+        // Gemini CLI announces model + session at stream start.
+        const initEvent = event as GeminiInitEvent;
+        if (initEvent.model && !model) model = initEvent.model;
+        break;
+      }
+
+      case 'message': {
+        // Gemini CLI: top-level assistant/user messages. Skip user echoes —
+        // they're the prompt, not the response. Accumulate assistant text
+        // chunks (both delta:true fragments and the final non-delta message)
+        // in the same textParts buffer so concat order matches emit order.
+        const msgEvent = event as GeminiMessageEvent;
+        if (msgEvent.role === 'assistant' && typeof msgEvent.content === 'string') {
+          textParts.push(msgEvent.content);
+        }
+        break;
+      }
+
+      case 'tool_use': {
+        // Gemini CLI: top-level tool_use (not wrapped in content_block_start).
+        // Accept both Gemini field names (tool_name / parameters) and
+        // Anthropic-like aliases (name / input) in case a hybrid stream
+        // surfaces. Raw tool names are preserved — the coverage babysitter
+        // already recognizes Gemini's vocabulary (read_file, write_file,
+        // glob, search_file_content, list_directory, read_many_files, etc.).
+        const toolEvent = event as GeminiToolUseEvent;
+        const tool = toolEvent.tool_name ?? toolEvent.name;
+        if (typeof tool === 'string') {
+          toolCallLog.push({
+            tool,
+            args: toolEvent.parameters ?? toolEvent.input ?? {},
+            timestamp: new Date().toISOString(),
+          });
         }
         break;
       }

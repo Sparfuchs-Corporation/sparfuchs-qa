@@ -77,6 +77,19 @@ function loadJson<T>(path: string): T | null {
   }
 }
 
+// Human-readable duration: '2h 1m 33s', '45s', '3m 4s'. Drops leading zero units.
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0 || h > 0) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+  return parts.join(' ');
+}
+
 // Locate the session-log markdown that a given agent wrote. Session logs are
 // named `${HH-MM-SS}_${agentLabel}.md` in sessionLogDir. When multiple exist
 // (retries / chunks), prefer the most recent.
@@ -123,7 +136,29 @@ export function generateQaReport(input: GenerateQaReportInput): void {
   lines.push(`# QA Report — ${input.projectSlug}`);
   lines.push('');
   lines.push(`**Run**: ${input.runId}`);
-  if (typeof meta.startedAt === 'string') lines.push(`**Started**: ${meta.startedAt}`);
+
+  const startedAtUtc = typeof meta.startedAt === 'string' ? meta.startedAt : null;
+  const completedAtUtc = typeof meta.completedAt === 'string' ? meta.completedAt : null;
+  const startedAtLocal = typeof meta.startedAtLocal === 'string' ? meta.startedAtLocal : null;
+  const completedAtLocal = typeof meta.completedAtLocal === 'string' ? meta.completedAtLocal : null;
+
+  if (startedAtUtc) {
+    lines.push(startedAtLocal
+      ? `**Started**: ${startedAtLocal}  (UTC: ${startedAtUtc})`
+      : `**Started**: ${startedAtUtc}`);
+  }
+  if (completedAtUtc) {
+    lines.push(completedAtLocal
+      ? `**Completed**: ${completedAtLocal}  (UTC: ${completedAtUtc})`
+      : `**Completed**: ${completedAtUtc}`);
+  }
+  if (startedAtUtc && completedAtUtc) {
+    const durationMs = Date.parse(completedAtUtc) - Date.parse(startedAtUtc);
+    if (Number.isFinite(durationMs) && durationMs >= 0) {
+      lines.push(`**Duration**: ${formatDuration(durationMs)}`);
+    }
+  }
+
   if (typeof meta.mode === 'string') lines.push(`**Mode**: ${meta.mode}`);
   if (typeof meta.status === 'string') lines.push(`**Status**: ${meta.status}`);
   if (typeof meta.isGitRepo === 'boolean') {
