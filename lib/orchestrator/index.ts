@@ -655,9 +655,24 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         babysitter.recordAgentRun(agentLabel, cappedLog);
       }
 
-      if (chunk) {
-        const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
-        status.coveragePercent = chunkEval.coveragePercent;
+      // Populate filesAssigned + coveragePercent for the TTY Files column.
+      // Chunked agents get their chunk size as the denominator (how much
+      // they were asked to cover); unchunked agents get the full source
+      // file count. Either way, the examined count comes from the
+      // babysitter's per-agent coverage map.
+      if (babysittingEnabled) {
+        const examined = babysitter.getFilesExaminedByAgent(agentLabel);
+        if (chunk) {
+          const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
+          status.coveragePercent = chunkEval.coveragePercent;
+          status.filesAssigned = chunk.files.length;
+        } else {
+          const assigned = allSourceFiles.length;
+          status.filesAssigned = assigned;
+          status.coveragePercent = assigned > 0
+            ? Math.round((examined / assigned) * 100)
+            : 0;
+        }
       }
 
       // Prefer the canonical JSON file contract: findings/<agent>.json.

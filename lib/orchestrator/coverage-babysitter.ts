@@ -192,6 +192,13 @@ export class CoverageBabysitter {
     return this.coveredFiles;
   }
 
+  // Count of distinct source files examined by a single agent. Populated
+  // by recordAgentRun; used by the dispatcher to fill the TTY Files column
+  // for every agent (chunked or not) after completion.
+  getFilesExaminedByAgent(agentName: string): number {
+    return this.coveredByAgent.get(agentName)?.size ?? 0;
+  }
+
   getTargetPercent(): number {
     return this.config.targetCoveragePercent;
   }

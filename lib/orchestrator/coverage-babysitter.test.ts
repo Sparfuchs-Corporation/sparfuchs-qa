@@ -110,6 +110,22 @@ describe('CoverageBabysitter', () => {
     });
   });
 
+  describe('getFilesExaminedByAgent', () => {
+    it('returns the per-agent examined count (used by TTY Files column)', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+        makeLog('Read', { file_path: '/repo/src/auth/jwt-utils.ts' }),
+      ]);
+      b.recordAgentRun('security-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/utils/format.ts' }),
+      ]);
+      assert.equal(b.getFilesExaminedByAgent('code-reviewer'), 2);
+      assert.equal(b.getFilesExaminedByAgent('security-reviewer'), 1);
+      assert.equal(b.getFilesExaminedByAgent('never-ran'), 0);
+    });
+  });
+
   describe('normalizePath — resolves against repoPath', () => {
     it('resolves relative tool-call paths against repoPath (not process.cwd)', () => {
       const b = new CoverageBabysitter(FILES, 'balanced', undefined, '/repo');
