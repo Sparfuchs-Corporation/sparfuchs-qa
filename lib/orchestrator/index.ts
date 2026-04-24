@@ -938,8 +938,12 @@ function countPatternMatches(allFiles: readonly string[], patterns: readonly str
 
 function patternToRegex(pattern: string): RegExp {
   // Escape regex specials except glob markers, then translate glob tokens.
+  // The character class MUST include `\\` — without it, a backslash in a
+  // glob pattern (e.g. Windows-style `apps\src\*.py`) leaks through and
+  // becomes a regex meta-character at compile time (e.g. `\s` → whitespace
+  // token). CodeQL js/incomplete-sanitization flagged the missing \\.
   const escaped = pattern
-    .replace(/[.+^$()|[\]{}]/g, '\\$&')
+    .replace(/[\\.+^$()|[\]{}]/g, '\\$&')
     .replace(/\*\*/g, '\x00')                    // placeholder
     .replace(/\*/g, '[^/]*')
     .replace(/\x00/g, '.*')
