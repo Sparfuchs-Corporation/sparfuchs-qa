@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import * as readline from 'node:readline';
 import type {
@@ -566,15 +566,22 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         delegationPrompt += buildRefDocPromptSuffix(config.claimsManifestPath);
       }
 
-      // Inject uncovered files as priority targets for unchunked agents
+      // Inject uncovered files as priority targets for unchunked agents.
+      // Use path.relative so trailing-slash / canonicalization quirks can't
+      // leak absolute paths into the prompt (which then look ridiculous to
+      // the agent and add noise to its context).
       if (injectScopeHint) {
         const priorityFiles = babysitter.getUncoveredFilesForHint(50);
         if (priorityFiles.length > 0) {
-          const relative = priorityFiles.map(f => f.replace(config.repoPath + '/', ''));
-          delegationPrompt +=
-            `\n\nPRIORITY FILES — The following files have not been examined by other agents yet. ` +
-            `Include them in your analysis where relevant to your domain:\n` +
-            relative.map(f => `  ${f}`).join('\n') + '\n';
+          const relativePaths = priorityFiles
+            .map(f => relative(config.repoPath, f))
+            .filter(f => !f.startsWith('..') && f.length > 0);
+          if (relativePaths.length > 0) {
+            delegationPrompt +=
+              `\n\nPRIORITY FILES — The following files have not been examined by other agents yet. ` +
+              `Include them in your analysis where relevant to your domain:\n` +
+              relativePaths.map(f => `  ${f}`).join('\n') + '\n';
+          }
         }
       }
 

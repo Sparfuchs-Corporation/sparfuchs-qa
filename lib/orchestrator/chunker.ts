@@ -1,22 +1,9 @@
-import { execSync } from 'node:child_process';
-import { join, dirname, relative } from 'node:path';
+import { dirname, relative } from 'node:path';
 import type { ChunkPlan, FileChunk, AgentDefinition, CoverageStrategy } from './types.js';
 import { getStrategyConfig } from './coverage-babysitter.js';
+import { discoverSourceFiles as _discoverSourceFiles } from './file-discovery.js';
 
 const CHUNKING_THRESHOLD = 50;
-
-const SOURCE_EXTENSIONS = [
-  'ts', 'tsx', 'js', 'jsx', 'mjs', 'cjs',
-  'py', 'go', 'rs', 'java', 'kt', 'rb',
-  'vue', 'svelte', 'astro',
-];
-
-const EXCLUDE_DIRS = [
-  'node_modules', 'dist', 'build', '.next', '.nuxt', 'out',
-  'vendor', '__pycache__', '.git', 'coverage', '.turbo',
-  'target', 'bin', 'obj', '.cache',
-  '.claude', '.worktrees', 'generated',
-];
 
 // Agents that need to see every file (general-purpose analysis)
 const CHUNKED_AGENT_NAMES = new Set([
@@ -31,34 +18,11 @@ export function isChunkedAgent(name: string): boolean {
   return CHUNKED_AGENT_NAMES.has(name);
 }
 
-/**
- * Discover all source files in the repo, respecting module scope and exclusions.
- */
-export function discoverSourceFiles(
-  repoPath: string,
-  moduleScope?: string,
-  excludedFiles?: Set<string>,
-): string[] {
-  const searchRoot = moduleScope ? join(repoPath, moduleScope) : repoPath;
-  const extGlob = SOURCE_EXTENSIONS.map(e => `*.${e}`).join(',');
-  const excludeArgs = EXCLUDE_DIRS.map(d => `--exclude-dir=${d}`).join(' ');
-
-  // Use find for reliable cross-platform file discovery
-  const cmd = `find "${searchRoot}" -type f \\( ${SOURCE_EXTENSIONS.map(e => `-name "*.${e}"`).join(' -o ')} \\) ${EXCLUDE_DIRS.map(d => `-not -path "*/${d}/*"`).join(' ')} 2>/dev/null | sort`;
-
-  try {
-    const output = execSync(cmd, { maxBuffer: 5 * 1024 * 1024, encoding: 'utf8' });
-    let files = output.trim().split('\n').filter(Boolean);
-
-    if (excludedFiles?.size) {
-      files = files.filter(f => !excludedFiles.has(f));
-    }
-
-    return files;
-  } catch {
-    return [];
-  }
-}
+// Re-exported from file-discovery.ts so callers continue to import from
+// chunker (historical call site in lib/orchestrator/index.ts). The unified
+// implementation lives in file-discovery.ts; see that module for the shared
+// EXCLUDE_DIRS list used by the chunker, testability-scanner, and preflight.
+export const discoverSourceFiles = _discoverSourceFiles;
 
 /**
  * Build a chunk plan for the given file list and agent set.
@@ -72,7 +36,15 @@ export function buildChunkPlan(
 ): ChunkPlan | null {
   const checkableFiles = allFiles.filter(f => !excludedFiles.includes(f));
 
+  // When the checkable pool is under the threshold, the dispatcher gives
+  // every chunked agent the full file list rather than slicing it. The null
+  // return is the signal for that mode; we log here so the behavior is
+  // visible in session logs and the operator doesn't mistake it for a bug.
   if (checkableFiles.length <= CHUNKING_THRESHOLD) {
+    process.stderr.write(
+      `[chunker] chunking disabled (${checkableFiles.length} source files ≤ CHUNKING_THRESHOLD=${CHUNKING_THRESHOLD}); ` +
+      `all chunked agents will see the full list\n`,
+    );
     return null;
   }
 
