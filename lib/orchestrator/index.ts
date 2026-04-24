@@ -676,6 +676,17 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       if (status.startedAt) {
         status.durationMs = Date.now() - new Date(status.startedAt).getTime();
       }
+      // Stub-write the expected JSON artifacts so finalization can tell
+      // "agent timed out" from "agent was never invoked." Without these
+      // files, run-verifier's per-agent checks can't distinguish the two,
+      // and the agent gets credited with zero-by-omission instead of
+      // zero-by-failure. Skip if a prior attempt already wrote findings.
+      const isTimeout = /exceeded \d+s hard timeout/.test(msg);
+      writeStubAgentArtifacts(runDir, agent.name, {
+        status: isTimeout ? 'timeout' : 'error',
+        error: msg.slice(0, 500),
+        provider: status.provider ?? 'unknown',
+      });
       // Surface the real failure reason immediately — don't make the operator
       // wait for meta.json finalization to find out why an agent died. The
       // dashboard only shows "FAILED" without the message.
@@ -1028,6 +1039,39 @@ interface FinalizerBag {
   dashboard?: DashboardController;
   ttyRenderer?: TtyRenderer;
   auditor?: QualityAuditor;
+}
+
+// Write stub findings + handoff JSON for an agent that failed (timeout or
+// error) before it could emit its own artifacts. The finalizer reads these
+// files; without them, the agent shows up as "never invoked" rather than
+// "ran and failed," and run-verifier can't credit it in per-agent tables.
+function writeStubAgentArtifacts(
+  runDir: string,
+  agentName: string,
+  meta: { status: 'timeout' | 'error'; error: string; provider: string },
+): void {
+  const findingsDir = join(runDir, 'findings');
+  const agentDataDir = join(runDir, 'agent-data');
+  try { mkdirSync(findingsDir, { recursive: true }); } catch { /* exists */ }
+  try { mkdirSync(agentDataDir, { recursive: true }); } catch { /* exists */ }
+
+  const findingsPath = join(findingsDir, `${agentName}.json`);
+  const handoffPath = join(agentDataDir, `${agentName}.output.json`);
+
+  // Don't clobber real output from a prior successful attempt in the same run.
+  if (!existsSync(findingsPath)) {
+    try {
+      writeFileSync(findingsPath, JSON.stringify({
+        findings: [],
+        _meta: { status: meta.status, error: meta.error, provider: meta.provider, agent: agentName },
+      }, null, 2));
+    } catch { /* best-effort; finalizer will log if needed */ }
+  }
+  if (!existsSync(handoffPath)) {
+    try {
+      writeFileSync(handoffPath, '{}');
+    } catch { /* best-effort */ }
+  }
 }
 
 function writePreSeedMeta(metaPath: string, config: OrchestrationConfig): void {

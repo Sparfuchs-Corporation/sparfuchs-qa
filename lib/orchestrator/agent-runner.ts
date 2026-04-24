@@ -5,6 +5,7 @@ import type {
 import { isCliProvider, isApiProvider } from './types.js';
 import { resolveModelForAgent, resolveProviderConstraint } from './config.js';
 import { getAdapter } from './adapters/index.js';
+import { extractToolCallsFromText } from './adapters/text-coverage-extractor.js';
 
 // --- Error Classification (used for fallback decisions) ---
 
@@ -118,6 +119,40 @@ function withTimeout<T>(
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+// --- Universal coverage fallback ---
+//
+// When an adapter returns empty structured telemetry (toolCallLog.length=0)
+// but the agent produced substantial prose output, regex-extract file paths
+// from the text so the coverage babysitter still credits the agent. This
+// catches:
+//   - pre-e6e21ed Gemini streams where tool_use events weren't parsed
+//   - Codex outputs that use shell commands we don't yet recognize
+//   - Openclaw (no structured output at all)
+//   - Any future provider whose event schema drifts
+//
+// Below this threshold we assume the agent genuinely did no file-touching
+// work (e.g., refused, returned an error message) and leave the log empty.
+const EMPTY_TELEMETRY_TEXT_THRESHOLD = 5_000;
+
+function applyUniversalCoverageFallback(
+  result: AgentRunResult,
+  provider: ProviderName,
+  config: OrchestrationConfig,
+): AgentRunResult {
+  if (result.toolCallLog.length > 0) return result;
+  if (result.text.length < EMPTY_TELEMETRY_TEXT_THRESHOLD) return result;
+  if (!config.sourceFiles || config.sourceFiles.size === 0) return result;
+
+  const recovered = extractToolCallsFromText(result.text, config.repoPath, config.sourceFiles);
+  if (recovered.length === 0) return result;
+
+  process.stderr.write(
+    `[${provider}] structured telemetry empty (${result.text.length} bytes text); ` +
+    `recovered ${recovered.length} file references from text\n`,
+  );
+  return { ...result, toolCallLog: recovered };
+}
+
 // --- Runner ---
 
 export async function runAgent(
@@ -180,7 +215,7 @@ export async function runAgent(
           timeoutMs,
           `${agent.name} (${provider}/${modelName})`,
         );
-        return result;
+        return applyUniversalCoverageFallback(result, provider, config);
       } catch (err: unknown) {
         lastError = err instanceof Error ? err : new Error(String(err));
 

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import { readFileSync, unlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve as resolvePath } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type {
   AgentDefinition, AgentRunResult, AgentRunStatus,
@@ -85,11 +85,16 @@ export class CodexCliAdapter implements AgentAdapter {
       status.tokenUsage.input = execution.usage.inputTokens;
       status.tokenUsage.output = execution.usage.outputTokens;
 
+      // Synthesize Read/Write entries for shell + apply_patch tool uses so
+      // the coverage babysitter (which doesn't know codex's vocabulary)
+      // credits file access. Original entries are preserved for observability.
+      const synthesized = expandCodexFileOps(execution.toolCallLog, config.repoPath);
+
       return {
         text,
         usage: execution.usage,
         steps: [],
-        toolCallLog: execution.toolCallLog,
+        toolCallLog: [...execution.toolCallLog, ...synthesized],
         finishReason: 'stop',
         provider: this.name,
         model: this.binary,
@@ -207,4 +212,110 @@ function parseJsonSafe(str: string): Record<string, unknown> {
   } catch {
     return { _raw: str };
   }
+}
+
+// --- Codex tool-use → babysitter vocabulary translation ---
+//
+// Codex exposes file access primarily through `shell` (with commands like
+// `cat`, `grep`, `sed`, `rg`) and `apply_patch` (unified-diff style patch
+// application). The coverage babysitter only speaks Claude / Gemini tool
+// names (Read, Grep, Glob, read_file, ...), so we synthesize equivalent
+// Read-style entries per file path mentioned. False positives are filtered
+// downstream by Set.has() against allSourceFiles, so erring wide is safe.
+
+// Commands that consume individual files — treat each non-flag positional
+// argument as a Read.
+const READ_LIKE_COMMANDS = new Set([
+  'cat', 'head', 'tail', 'less', 'more', 'wc',
+  'md5', 'md5sum', 'sha1sum', 'sha256sum', 'stat', 'file',
+  'xxd', 'hexdump', 'od',
+]);
+
+// Commands that scan a directory — treat the first non-flag positional arg
+// as a Grep-like scan.
+const SCAN_LIKE_COMMANDS = new Set([
+  'grep', 'egrep', 'fgrep', 'rg', 'ag', 'ack', 'ripgrep',
+  'find', 'fd', 'ls', 'tree',
+]);
+
+function expandCodexFileOps(
+  entries: ReadonlyArray<ToolCallLogEntry>,
+  repoPath: string,
+): ToolCallLogEntry[] {
+  const out: ToolCallLogEntry[] = [];
+  const ts = new Date().toISOString();
+  for (const e of entries) {
+    if (e.tool === 'shell') {
+      const command = extractShellCommand(e.args);
+      if (!command || command.length === 0) continue;
+      const cmdName = basenameOf(command[0] ?? '');
+      const positional = command.slice(1).filter(a => !a.startsWith('-') && a.length > 0);
+      if (READ_LIKE_COMMANDS.has(cmdName)) {
+        for (const p of positional) {
+          out.push({ tool: 'Read', args: { file_path: resolvePath(repoPath, p) }, timestamp: ts });
+        }
+      } else if (SCAN_LIKE_COMMANDS.has(cmdName)) {
+        // Treat every directory-like positional as a Grep scan; babysitter
+        // expands this to every file under the path.
+        for (const p of positional) {
+          out.push({ tool: 'Grep', args: { path: resolvePath(repoPath, p) }, timestamp: ts });
+        }
+      } else {
+        // Unknown shell command: fall back to Read on any arg that looks
+        // like a file path. Better to over-credit than miss real accesses.
+        for (const p of positional) {
+          if (p.includes('/') || p.includes('.')) {
+            out.push({ tool: 'Read', args: { file_path: resolvePath(repoPath, p) }, timestamp: ts });
+          }
+        }
+      }
+      continue;
+    }
+    if (e.tool === 'apply_patch') {
+      const patchText = extractPatchText(e.args);
+      if (!patchText) continue;
+      for (const path of parseApplyPatchPaths(patchText)) {
+        out.push({ tool: 'Write', args: { file_path: resolvePath(repoPath, path) }, timestamp: ts });
+      }
+      continue;
+    }
+  }
+  return out;
+}
+
+function extractShellCommand(args: unknown): string[] | null {
+  if (!args || typeof args !== 'object') return null;
+  const a = args as Record<string, unknown>;
+  if (Array.isArray(a.command)) return a.command.map(String);
+  if (typeof a.command === 'string') return a.command.split(/\s+/).filter(Boolean);
+  return null;
+}
+
+function extractPatchText(args: unknown): string | null {
+  if (!args || typeof args !== 'object') return null;
+  const a = args as Record<string, unknown>;
+  if (typeof a.input === 'string') return a.input;
+  if (typeof a.patch === 'string') return a.patch;
+  return null;
+}
+
+function parseApplyPatchPaths(patch: string): string[] {
+  const paths: string[] = [];
+  // Codex / Claude custom format: "*** Add File: path", "*** Update File: path", "*** Delete File: path"
+  const fileOp = /^\*\*\*\s+(?:Add|Update|Delete)\s+File:\s+(.+)$/gm;
+  let m;
+  while ((m = fileOp.exec(patch)) !== null) {
+    paths.push(m[1].trim());
+  }
+  // Unified diff markers: "--- a/path", "+++ b/path"
+  const diffMarker = /^[-+]{3}\s+[ab]\/(.+)$/gm;
+  while ((m = diffMarker.exec(patch)) !== null) {
+    paths.push(m[1].trim());
+  }
+  return [...new Set(paths)];
+}
+
+function basenameOf(cmd: string): string {
+  const ix = cmd.lastIndexOf('/');
+  return ix >= 0 ? cmd.slice(ix + 1) : cmd;
 }
