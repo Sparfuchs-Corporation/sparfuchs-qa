@@ -26,7 +26,7 @@ function makeFixture(): string {
   writeFileSync(join(root, 'libs/shared/index.ts'), 'export const x = 1');
 
   mkdirSync(join(root, 'services/api'), { recursive: true });
-  writeFileSync(join(root, 'services/api/main.py'), 'def run(): pass')
+  writeFileSync(join(root, 'services/api/main.py'), 'def run(): pass');
 
   // Vendored Python env (the bug)
   mkdirSync(join(root, 'apps/ai-proxy/.venv/lib/python3.9/site-packages/PIL'), { recursive: true });
