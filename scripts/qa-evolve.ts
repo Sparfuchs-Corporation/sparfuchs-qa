@@ -1,5 +1,5 @@
 import { db, COLLECTIONS } from '../lib/firestore';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import type { QaCanaryRun } from '../lib/types';
 
 async function evolveAgents(days = 30) {
@@ -10,7 +10,15 @@ async function evolveAgents(days = 30) {
   const prompt = `You are the Lead QA Agent. Here is the last ${days} days of canary history:\n${JSON.stringify(summary, null, 2)}\n\nIdentify: 1. Canaries that are consistently passing → tighten thresholds 2. Canaries that are consistently failing → suggest investigation 3. New canaries we should add. Output ONLY a structured list of evolution suggestions (max 5).`;
   console.log('=== EVOLVE PROMPT ===\n', prompt);
   if (process.env.QA_EVOLVE_DRY !== '1') {
-    try { const output = execSync(`claude "${prompt.replace(/"/g, '\\"')}"`, { encoding: 'utf8' }); console.log('\n=== CLAUDE EVOLUTION OUTPUT ===\n', output); } catch (e) { console.error('Claude CLI not available'); }
+    try {
+      // execFileSync invokes execvp() directly — no shell — so the prompt
+      // content cannot be reinterpreted as shell syntax regardless of any
+      // backticks / $() / ; / && it may contain. Fixes CodeQL
+      // js/incomplete-sanitization (the old execSync + replace pattern was
+      // brittle against any metacharacter outside the double quote).
+      const output = execFileSync('claude', [prompt], { encoding: 'utf8' });
+      console.log('\n=== CLAUDE EVOLUTION OUTPUT ===\n', output);
+    } catch (e) { console.error('Claude CLI not available'); }
   }
 }
 const days = process.argv.includes('--days') ? parseInt(process.argv[process.argv.indexOf('--days') + 1]) : 30;
