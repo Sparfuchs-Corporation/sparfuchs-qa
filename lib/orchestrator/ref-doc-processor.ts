@@ -154,16 +154,13 @@ function extractDocxText(filePath: string): string {
  * Multi-step text extraction that is safe-by-context for LLM prompt consumption.
  * Separated into a function so the CodeQL suppression has a narrow footprint.
  */
-// codeql[js/incomplete-multi-character-sanitization] — output is LLM prompt
-// text, never HTML; entity-decoding order is intentional to preserve literal
-// user-entered angle brackets.
+// Keep angle brackets entity-escaped so tag-like text cannot be reintroduced
+// after XML tag stripping.
 function stripDocxXml(xml: string): string {
   return xml
     .replace(/<w:br[^>]*\/>/g, '\n')
     .replace(/<\/w:p>/g, '\n')
     .replace(/<[^>]+>/g, '')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
     .replace(/&amp;/g, '&')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
