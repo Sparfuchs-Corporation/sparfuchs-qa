@@ -10,7 +10,7 @@
 // reads it to grade the actual run afterwards.
 
 import * as readline from 'node:readline';
-import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, writeFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve as resolvePath } from 'node:path';
 import type {
   AgentDefinition, ChunkPlan, CoverageStrategy,
