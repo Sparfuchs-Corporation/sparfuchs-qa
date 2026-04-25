@@ -23,8 +23,17 @@ async function main() {
   const modelsConfig = loadModelsConfig();
   enforceDataClassification(modelsConfig);
   const { available, disabled } = resolveProviderKeys(modelsConfig);
+  // Log provider counts only. The `disabled` array entries embed env-var
+  // *names* (never values) and words like "API key" — CodeQL was unable
+  // to distinguish that from clear-text secret logging. Refactoring to a
+  // count keeps the diagnostic value while eliminating the false
+  // positive. Full details remain available in `config/models.yaml`.
   console.log(`Available providers: ${available.join(', ')}`);
-  console.log(`Disabled: ${disabled.join('; ')}\n`);
+  if (disabled.length > 0) {
+    console.log(`Disabled providers: ${disabled.length} (see config/models.yaml)\n`);
+  } else {
+    console.log();
+  }
 
   // 2. Start auth proxy
   const registry = new ProviderRegistry();

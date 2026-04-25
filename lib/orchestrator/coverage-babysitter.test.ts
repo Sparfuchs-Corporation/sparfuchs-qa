@@ -110,6 +110,107 @@ describe('CoverageBabysitter', () => {
     });
   });
 
+  describe('per-category counters (Phase 8)', () => {
+    it('findingsReadByAgent increments on findings/*.json reads', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('qa-gap-analyzer', [
+        makeLog('Read', { file_path: '/repo/qa-data/x/runs/y/findings/code-reviewer.json' }),
+        makeLog('Read', { file_path: '/repo/qa-data/x/runs/y/findings/security-reviewer.json' }),
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),  // not a findings file
+      ]);
+      assert.equal(b.getFindingsReadByAgent('qa-gap-analyzer'), 2);
+    });
+
+    it('probeCountByAgent increments on Bash/shell with URL-ish command', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('api-contract-prober', [
+        makeLog('Bash', { command: 'curl -s https://api.example.com/users' }),
+        makeLog('Bash', { command: 'curl -X POST https://api.example.com/users' }),
+        makeLog('Bash', { command: 'ls -la' }),  // not a probe
+      ]);
+      assert.equal(b.getProbeCountByAgent('api-contract-prober'), 2);
+    });
+
+    it('buildReport byAgent includes findingsReadCount + probeCount when non-zero', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('qa-gap-analyzer', [
+        makeLog('Read', { file_path: '/repo/qa-data/x/runs/y/findings/a.json' }),
+      ]);
+      b.recordAgentRun('api-contract-prober', [
+        makeLog('Bash', { command: 'curl https://api.example.com/' }),
+      ]);
+      const rep = b.buildReport();
+      const qa = rep.byAgent.find(r => r.agent === 'qa-gap-analyzer');
+      const probe = rep.byAgent.find(r => r.agent === 'api-contract-prober');
+      assert.equal(qa?.findingsReadCount, 1);
+      assert.equal(probe?.probeCount, 1);
+    });
+  });
+
+  describe('getFilesExaminedByAgent', () => {
+    it('returns the per-agent examined count (used by TTY Files column)', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+        makeLog('Read', { file_path: '/repo/src/auth/jwt-utils.ts' }),
+      ]);
+      b.recordAgentRun('security-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/utils/format.ts' }),
+      ]);
+      assert.equal(b.getFilesExaminedByAgent('code-reviewer'), 2);
+      assert.equal(b.getFilesExaminedByAgent('security-reviewer'), 1);
+      assert.equal(b.getFilesExaminedByAgent('never-ran'), 0);
+    });
+  });
+
+  describe('normalizePath — resolves against repoPath', () => {
+    it('resolves relative tool-call paths against repoPath (not process.cwd)', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced', undefined, '/repo');
+      // Gemini CLI child processes run with cwd=config.repoPath, so their
+      // tool_use events often emit relative args (e.g. "src/auth/middleware.ts").
+      b.recordAgentRun('code-reviewer', [
+        makeLog('read_file', { file_path: 'src/auth/middleware.ts' }),
+      ]);
+      assert.ok(
+        b.getFilesExamined().has('/repo/src/auth/middleware.ts'),
+        `expected /repo/src/auth/middleware.ts in ${JSON.stringify([...b.getFilesExamined()])}`,
+      );
+    });
+
+    it('falls back to process.cwd resolution when repoPath is absent (2-arg ctor)', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      // With no repoPath, absolute paths still work.
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+      ]);
+      assert.ok(b.getFilesExamined().has('/repo/src/auth/middleware.ts'));
+    });
+  });
+
+  describe('buildReport — uncoveredFiles path format', () => {
+    it('emits absolute paths when repoPath is not provided', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced');
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+      ]);
+      const report = b.buildReport();
+      assert.ok(report.uncoveredFiles.every(f => f.startsWith('/')),
+        `expected all absolute, got: ${JSON.stringify(report.uncoveredFiles)}`);
+    });
+
+    it('emits repo-relative paths when repoPath is provided', () => {
+      const b = new CoverageBabysitter(FILES, 'balanced', undefined, '/repo');
+      b.recordAgentRun('code-reviewer', [
+        makeLog('Read', { file_path: '/repo/src/auth/middleware.ts' }),
+      ]);
+      const report = b.buildReport();
+      assert.ok(report.uncoveredFiles.every(f => !f.startsWith('/')),
+        `expected all relative, got: ${JSON.stringify(report.uncoveredFiles)}`);
+      assert.ok(report.uncoveredFiles.includes('src/auth/jwt-utils.ts'));
+      assert.ok(report.uncoveredFiles.includes('src/api/routes/users.ts'));
+    });
+  });
+
   describe('buildRetryPrompt — path sanitization', () => {
     it('should reject paths with control characters', () => {
       const b = new CoverageBabysitter(FILES, 'thorough');

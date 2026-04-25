@@ -103,7 +103,14 @@ function checkSiemTransport(root: string): { found: boolean; details: string } {
     'elastic-apm',
   ];
 
-  const pattern = transportPatterns.map((p) => p.replace(/[/@-]/g, '\\$&')).join('|');
+  // Escape every regex metacharacter so the joined ERE pattern is safe
+  // regardless of what the transport-list contents look like. The
+  // previous `[/@-]` escape was incomplete (missed `.`, `+`, `*`, `?`,
+  // `(`, `)`, `[`, `]`, `{`, `}`, `^`, `$`, `|`, `\`) which CodeQL
+  // flagged as js/incomplete-sanitization.
+  const escapeRegex = (s: string): string =>
+    s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = transportPatterns.map(escapeRegex).join('|');
 
   try {
     const output = execSync(

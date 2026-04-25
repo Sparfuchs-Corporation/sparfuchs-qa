@@ -10,6 +10,7 @@ import type {
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
 import { parseStreamJson } from './stream-json-parser.js';
+import { detectAuthPrompt } from './shared-auth-check.js';
 
 export class ClaudeCliAdapter implements AgentAdapter {
   readonly name = 'claude-cli' as const;
@@ -64,7 +65,8 @@ export class ClaudeCliAdapter implements AgentAdapter {
         delegationPrompt,                    // positional prompt — last arg
       ];
 
-      const rawOutput = await spawnCli(this.binary, args, config.repoPath);
+      const { stdout: rawOutput, stderr: rawStderr } = await spawnCli(this.binary, args, config.repoPath);
+      detectAuthPrompt(rawOutput, rawStderr);
       const parsed = parseStreamJson(rawOutput);
 
       status.durationMs = Date.now() - startTime;
@@ -88,7 +90,7 @@ export class ClaudeCliAdapter implements AgentAdapter {
   }
 }
 
-function spawnCli(binary: string, args: string[], cwd: string): Promise<string> {
+function spawnCli(binary: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
@@ -109,7 +111,7 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
 
     proc.on('close', (code) => {
       if (code === 0) {
-        resolve(stdout);
+        resolve({ stdout, stderr });
       } else {
         reject(new Error(`${binary} exited with code ${code}: ${stderr.slice(0, 500)}`));
       }

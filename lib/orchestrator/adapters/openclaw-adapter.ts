@@ -6,6 +6,7 @@ import type {
 } from '../types.js';
 import { detectCli, type AgentAdapter } from './index.js';
 import { extractToolCallsFromText } from './text-coverage-extractor.js';
+import { detectAuthPrompt } from './shared-auth-check.js';
 
 const ADDDIR_REQUIRED_AGENTS = new Set([
   'ref-doc-verifier',
@@ -78,7 +79,8 @@ export class OpenClawAdapter implements AgentAdapter {
 
     // OpenClaw accepts a prompt directly
     const args = [combinedPrompt];
-    const text = await spawnCli(this.binary, args, config.repoPath);
+    const { stdout: text, stderr } = await spawnCli(this.binary, args, config.repoPath);
+    detectAuthPrompt(text, stderr);
 
     status.durationMs = Date.now() - startTime;
 
@@ -108,7 +110,7 @@ function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
   );
 }
 
-function spawnCli(binary: string, args: string[], cwd: string): Promise<string> {
+function spawnCli(binary: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
@@ -125,7 +127,7 @@ function spawnCli(binary: string, args: string[], cwd: string): Promise<string> 
     });
 
     proc.on('close', (code) => {
-      if (code === 0) resolve(stdout);
+      if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(`${binary} exited with code ${code}: ${stderr.slice(0, 500)}`));
     });
 

@@ -1,4 +1,43 @@
 import type { RunStateSnapshot } from '../run-state.js';
+import type { FilesDisplay } from '../types.js';
+
+const EM_DASH = '—';
+
+// Render the TTY Files column for one agent row. Category-aware so the
+// column tells the operator whether the agent did real work appropriate
+// to its type — build-verifier's "6 files" is honest; showing it as
+// "0/1297 0%" misled by implying it audited nothing.
+function renderFilesCell(
+  display: FilesDisplay | null,
+  legacy: { examined: number; assigned: number; percent: number } | null,
+  status: string,
+): string {
+  if (display) {
+    switch (display.kind) {
+      case 'chunked':
+      case 'pattern':
+        return `${display.examined}/${display.assigned} ${display.percent}%${status === 'running' ? '↑' : ''}`;
+      case 'command':
+        return `${display.examined} files`;
+      case 'synthesis':
+        return `synthesis (${display.readCount} read)`;
+      case 'probe':
+        return `${display.probeCount} ${display.label}`;
+      case 'hybrid':
+        return `${display.examined} files`;
+      case 'skipped':
+        return 'n/a';
+      case 'pending':
+        return EM_DASH;
+    }
+  }
+  // Backward-compat path — legacy chunked-only rendering when filesDisplay
+  // hasn't been populated yet (early in dispatch before recordAgentRun).
+  if (legacy) {
+    return `${legacy.examined}/${legacy.assigned} ${legacy.percent}%${status === 'running' ? '↑' : ''}`;
+  }
+  return EM_DASH;
+}
 
 const STATUS_ICONS: Record<string, string> = {
   queued: '  ',
@@ -122,9 +161,7 @@ export class TtyRenderer {
 
       const tokens = row.tokens > 0 ? this.fmtTokens(row.tokens) : '\u2014';
       const findings = row.status === 'complete' ? String(row.findings) : '\u2014';
-      const filesStr = row.files
-        ? `${row.files.examined}/${row.files.assigned} ${row.files.percent}%${row.status === 'running' ? '\u2191' : ''}`
-        : '\u2014';
+      const filesStr = renderFilesCell(row.filesDisplay, row.files, row.status);
       const duration = row.durationMs > 0 ? `${Math.round(row.durationMs / 1000)}s` : '\u2014';
       const errorSuffix = row.error?.startsWith('Skipped') ? ` ${row.error}` : '';
 

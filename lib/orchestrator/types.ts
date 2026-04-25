@@ -117,6 +117,11 @@ export interface AgentOverride {
   tier?: ModelTier;
   disableBash?: boolean;
   maxSteps?: number;
+  // Hard per-agent timeout in milliseconds. When set, this wins over the
+  // tier-default and the QA_AGENT_TIMEOUT_{TIER}_MS env var. Use for agents
+  // whose workload genuinely exceeds the tier band (e.g., doc-reviewer on a
+  // large repo).
+  timeoutMs?: number;
 }
 
 export interface ModelsYaml {
@@ -143,7 +148,27 @@ export interface AgentDefinition {
   disableBash: boolean;
   sourcePath: string;
   contentHash: string;
+  // Per-agent timeout override (see AgentOverride.timeoutMs). Populated by
+  // agent-parser from config/models.yaml agentOverrides.
+  timeoutMs?: number;
+  // Work-category override from agent-.md frontmatter (scope_category:).
+  // Falls back to AGENT_SCOPES map in agent-scopes.ts.
+  scopeCategory?: 'chunked' | 'pattern' | 'command' | 'synthesis' | 'probe' | 'hybrid';
 }
+
+// Discriminated union for the TTY Files column. Each agent category
+// renders differently because "files examined / total source" is only
+// meaningful for chunked agents — build-verifier against 1297 source
+// files is nonsense.
+export type FilesDisplay =
+  | { kind: 'chunked'; examined: number; assigned: number; percent: number }
+  | { kind: 'pattern'; examined: number; assigned: number; percent: number }
+  | { kind: 'command'; examined: number }
+  | { kind: 'synthesis'; readCount: number }
+  | { kind: 'probe'; probeCount: number; label: string }
+  | { kind: 'hybrid'; examined: number }
+  | { kind: 'skipped' }
+  | { kind: 'pending' };
 
 // --- Run Status ---
 
@@ -168,6 +193,9 @@ export interface AgentRunStatus {
   outputSizeBytes: number;
   coveragePercent: number | null;
   filesAssigned: number | null;
+  // Category-aware file work rendering. Set on agent completion. When null,
+  // legacy coveragePercent/filesAssigned path is used.
+  filesDisplay: FilesDisplay | null;
   error: string | null;
 }
 
@@ -327,7 +355,14 @@ export interface CoverageReport {
   filesExaminedCount: number;
   uncoveredFiles: string[];
   retriesExecuted: number;
-  byAgent: Array<{ agent: string; filesExamined: number }>;
+  byAgent: Array<{
+    agent: string;
+    filesExamined: number;
+    // Phase 8: category-specific counters for agents whose work is not
+    // measured by "source files read". Optional — legacy consumers ignore.
+    findingsReadCount?: number;
+    probeCount?: number;
+  }>;
 }
 
 // --- Agent Output Envelope (inter-agent data exchange) ---
