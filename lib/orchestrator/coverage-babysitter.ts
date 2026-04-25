@@ -102,24 +102,40 @@ export class CoverageBabysitter {
   private readonly coveredByAgent = new Map<string, Set<string>>();
   private readonly strategy: CoverageStrategy;
   private readonly config: CoverageStrategyConfig;
+  // Repo root for mapping absolute paths back to relative in buildReport().
+  // Optional so existing 2-arg tests keep working; when unset, uncoveredFiles
+  // in the report fall back to absolute paths.
+  private readonly repoPath: string | null;
+  // Category-specific per-agent counters for the TTY Files column:
+  // synthesis agents (qa-gap-analyzer, release-gate-synthesizer) care about
+  // how many findings JSON files they read; probe agents (api-contract-
+  // prober, e2e-tester) care about how many outbound network calls.
+  private readonly findingsReadByAgent = new Map<string, number>();
+  private readonly probeCountByAgent = new Map<string, number>();
   private retriesExecuted = 0;
 
   constructor(
     allSourceFiles: string[],
     strategy: CoverageStrategy,
     config?: CoverageStrategyConfig,
+    repoPath?: string,
   ) {
     this.allFilesArray = allSourceFiles;
     this.allFiles = new Set(allSourceFiles);
     this.strategy = strategy;
     this.config = config ?? getStrategyConfig(strategy);
+    this.repoPath = repoPath ?? null;
   }
 
   /**
    * Extract file paths from tool call log entries and mark them as covered.
+   * Also tallies category-specific counters: findings JSON reads (for
+   * synthesis agents) and network-probe calls (for probe agents).
    */
   recordAgentRun(agentName: string, toolCallLog: ToolCallLogEntry[]): void {
     const agentFiles = new Set<string>();
+    let findingsReadDelta = 0;
+    let probeDelta = 0;
 
     for (const entry of toolCallLog) {
       const paths = this.extractFilePaths(entry);
@@ -128,6 +144,17 @@ export class CoverageBabysitter {
           this.coveredFiles.add(p);
           agentFiles.add(p);
         }
+        // Synthesis agents read findings/*.json. Credit those even though
+        // they're not in allFiles (which is source-only).
+        if (/\/findings\/[^/]+\.json$/.test(p)) {
+          findingsReadDelta++;
+        }
+      }
+      // Probe agents make outbound network calls via shell / Bash with
+      // URLs in the command. Rough heuristic: scan args for http(s) URLs
+      // or typical CLI patterns (curl, httpie, wget).
+      if (isNetworkProbe(entry)) {
+        probeDelta++;
       }
     }
 
@@ -137,6 +164,20 @@ export class CoverageBabysitter {
     } else {
       this.coveredByAgent.set(agentName, agentFiles);
     }
+    if (findingsReadDelta > 0) {
+      this.findingsReadByAgent.set(agentName, (this.findingsReadByAgent.get(agentName) ?? 0) + findingsReadDelta);
+    }
+    if (probeDelta > 0) {
+      this.probeCountByAgent.set(agentName, (this.probeCountByAgent.get(agentName) ?? 0) + probeDelta);
+    }
+  }
+
+  getFindingsReadByAgent(agentName: string): number {
+    return this.findingsReadByAgent.get(agentName) ?? 0;
+  }
+
+  getProbeCountByAgent(agentName: string): number {
+    return this.probeCountByAgent.get(agentName) ?? 0;
   }
 
   /**
@@ -186,6 +227,13 @@ export class CoverageBabysitter {
     return this.coveredFiles;
   }
 
+  // Count of distinct source files examined by a single agent. Populated
+  // by recordAgentRun; used by the dispatcher to fill the TTY Files column
+  // for every agent (chunked or not) after completion.
+  getFilesExaminedByAgent(agentName: string): number {
+    return this.coveredByAgent.get(agentName)?.size ?? 0;
+  }
+
   getTargetPercent(): number {
     return this.config.targetCoveragePercent;
   }
@@ -227,16 +275,35 @@ export class CoverageBabysitter {
   }
 
   /**
-   * Build the final coverage report.
+   * Build the final coverage report. uncoveredFiles is canonicalized to
+   * repo-relative paths when repoPath was provided — otherwise left absolute
+   * for backwards compatibility with tests that pass only 2-3 args.
    */
   buildReport(): CoverageReport {
-    const uncoveredFiles = this.allFilesArray
+    const rawUncovered = this.allFilesArray
       .filter(f => !this.coveredFiles.has(f))
       .sort();
 
+    const uncoveredFiles = this.repoPath
+      ? rawUncovered.map(f => relative(this.repoPath!, f))
+      : rawUncovered;
+
     const byAgent: CoverageReport['byAgent'] = [];
-    for (const [agent, files] of this.coveredByAgent) {
-      byAgent.push({ agent, filesExamined: files.size });
+    const allAgentNames = new Set<string>([
+      ...this.coveredByAgent.keys(),
+      ...this.findingsReadByAgent.keys(),
+      ...this.probeCountByAgent.keys(),
+    ]);
+    for (const agent of allAgentNames) {
+      const entry: CoverageReport['byAgent'][number] = {
+        agent,
+        filesExamined: this.coveredByAgent.get(agent)?.size ?? 0,
+      };
+      const fr = this.findingsReadByAgent.get(agent);
+      if (fr !== undefined && fr > 0) entry.findingsReadCount = fr;
+      const pc = this.probeCountByAgent.get(agent);
+      if (pc !== undefined && pc > 0) entry.probeCount = pc;
+      byAgent.push(entry);
     }
     byAgent.sort((a, b) => b.filesExamined - a.filesExamined);
 
@@ -365,11 +432,36 @@ export class CoverageBabysitter {
     return paths;
   }
 
+  // Resolve a tool-call file-path arg to its absolute form. When repoPath was
+  // provided at construction, use it as the base — CLI adapters (Gemini,
+  // Codex, Claude) run child processes with cwd=repoPath, so their tool_use
+  // events often emit paths relative to the target repo, not the parent
+  // orchestrator's cwd. Without this, Set.has() lookups against allFiles
+  // (absolute paths rooted at repoPath) silently miss and coveredFiles
+  // stays empty — the bug that froze the TTY at "0 / N files (0%)".
   private normalizePath(filePath: string): string {
     try {
-      return resolve(filePath);
+      return this.repoPath ? resolve(this.repoPath, filePath) : resolve(filePath);
     } catch {
       return filePath;
     }
   }
+}
+
+// Detect a probe-style tool call: a Bash/shell invocation whose command
+// looks like an outbound network call. Used to tally probeCount for
+// live-probe agents (api-contract-prober, e2e-tester) whose "coverage"
+// metric is requests made, not files read.
+const PROBE_COMMAND_RE = /\b(curl|wget|http|httpie|xh|fetch)\b|https?:\/\//i;
+
+function isNetworkProbe(entry: ToolCallLogEntry): boolean {
+  if (entry.tool !== 'Bash' && entry.tool !== 'run_shell_command' && entry.tool !== 'shell') {
+    return false;
+  }
+  const cmd = (entry.args as { command?: unknown }).command;
+  const cmdStr = typeof cmd === 'string'
+    ? cmd
+    : Array.isArray(cmd) ? cmd.map(String).join(' ')
+    : '';
+  return PROBE_COMMAND_RE.test(cmdStr);
 }

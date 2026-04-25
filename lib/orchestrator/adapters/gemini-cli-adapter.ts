@@ -9,6 +9,7 @@ import type {
 } from '../types.js';
 import { detectCli, type AgentAdapter, type AuthCheckResult } from './index.js';
 import { parseStreamJson } from './stream-json-parser.js';
+import { detectAuthPrompt } from './shared-auth-check.js';
 import { resolveApiKey } from '../credential-store.js';
 
 // Env-var name Gemini CLI reads. The keychain entry name matches so a single
@@ -164,12 +165,13 @@ export class GeminiCliAdapter implements AgentAdapter {
       }
     }
 
-    const rawOutput = await spawnCli(this.binary, args, config.repoPath, childEnv);
+    const { stdout: rawOutput, stderr: rawStderr } = await spawnCli(this.binary, args, config.repoPath, childEnv);
 
     // Gemini CLI exits 0 even when it hits an interactive OAuth prompt and
     // never ran the model. Detect that pattern and fail loudly instead of
-    // recording a fake-success agent run.
-    detectAuthPrompt(rawOutput);
+    // recording a fake-success agent run. Check both stdout and stderr —
+    // some variants land on stderr only.
+    detectAuthPrompt(rawOutput, rawStderr);
 
     const parsed = parseStreamJson(rawOutput);
 
@@ -263,31 +265,8 @@ function inspectOAuthCache(path: string): OAuthStatus {
   return { usable: false, reason: 'no expiry_date or refresh_token in file.' };
 }
 
-// Phrases Gemini CLI emits when it falls back to an interactive auth flow.
-// These are the unambiguous fingerprints of a non-interactive OAuth attempt.
-const AUTH_PROMPT_PATTERNS = [
-  /Opening authentication page in your browser/i,
-  /Do you want to continue\?\s*\[Y\/n\]/i,
-  /Authentication cancelled by user/i,
-  /FatalCancellationError/i,
-];
-
-function detectAuthPrompt(rawOutput: string): void {
-  // Only scan the first ~1KB — if auth prompts appear, they're always at the
-  // head of stdout before any JSON events arrive.
-  const head = rawOutput.slice(0, 1024);
-  for (const pat of AUTH_PROMPT_PATTERNS) {
-    if (pat.test(head)) {
-      throw new Error(
-        `gemini CLI hit an interactive authentication prompt and cannot run ` +
-        `under the orchestrator. Fix either: ` +
-        `(1) export GEMINI_API_KEY=<your-key> in the shell, or ` +
-        `(2) run \`gemini\` once interactively to cache OAuth credentials, ` +
-        `then retry. Detected prompt: ${head.trim().slice(0, 200)}`,
-      );
-    }
-  }
-}
+// Interactive-auth detection moved to shared-auth-check.ts (covers all four
+// CLI adapters on both stdout and stderr).
 
 function buildInlinedPrompt(systemPrompt: string, userPrompt: string): string {
   // IMPORTANT: delimiters must NOT start with "---". Gemini CLI's argv parser
@@ -307,7 +286,7 @@ function spawnCli(
   args: string[],
   cwd: string,
   env: Record<string, string | undefined>,
-): Promise<string> {
+): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const proc = spawn(binary, args, {
       cwd,
@@ -324,7 +303,7 @@ function spawnCli(
     });
 
     proc.on('close', (code) => {
-      if (code === 0) resolve(stdout);
+      if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(`${binary} exited with code ${code}: ${stderr.slice(0, 500)}`));
     });
 
