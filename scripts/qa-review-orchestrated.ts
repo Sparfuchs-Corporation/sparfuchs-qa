@@ -5,6 +5,7 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runOrchestration } from '../lib/orchestrator/index.js';
+import { slugify } from '../lib/project-id.js';
 import type { OrchestrationConfig, ProviderName, CoverageStrategy } from '../lib/orchestrator/types.js';
 
 const MODULE_DIR = dirname(fileURLToPath(import.meta.url));
@@ -58,8 +59,11 @@ async function main(): Promise<void> {
   const concurrency = concurrencyArg ? parseInt(concurrencyArg, 10) : undefined;
   const isGitRepo = args['no-git'] !== 'true';
 
-  // Derive project slug from repo directory name
-  const projectSlug = repoPath.split('/').pop()!.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  if (args['project']) process.env.PROJECT = args['project'];
+  process.env.TARGET_REPO = process.env.TARGET_REPO ?? repoPath;
+  const projectSlug = slugify(
+    args['project'] ?? repoPath.split('/').pop()!,
+  );
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10);
   const timeStr = now.toISOString().slice(11, 16).replace(':', '');

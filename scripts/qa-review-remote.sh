@@ -610,6 +610,7 @@ else
     --mode "$MODE"
     --user-prompt "$USER_PROMPT"
   )
+  [[ -n "$PROJECT" ]] && ORCH_ARGS+=(--project "$PROJECT")
   [[ -n "$MODULE" ]] && ORCH_ARGS+=(--module "$MODULE")
   [[ -n "$AGENTS" ]] && ORCH_ARGS+=(--selected-agents "$AGENTS")
   [[ -n "$COMPOSE_RULES" ]] && ORCH_ARGS+=(--compose-rules true)
