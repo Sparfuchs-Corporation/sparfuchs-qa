@@ -123,6 +123,7 @@ export class ObservabilityTracker {
       outputSizeBytes: 0,
       coveragePercent: null,
       filesAssigned: null,
+      filesDisplay: null,
       error: null,
     };
     this.agents.set(name, status);

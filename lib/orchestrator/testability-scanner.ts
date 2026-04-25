@@ -6,6 +6,12 @@ import type {
   TestInfraReport, AgentSkipPrediction, TestingRecommendation,
   TestabilityReport,
 } from './types.js';
+import {
+  countFilesByExtension as sharedCountFilesByExtension,
+  countAllFiles,
+  excludePathArgsForFind,
+  excludeDirArgsForGrep,
+} from './file-discovery.js';
 
 const READ_TOOL_LINE_LIMIT = 2000;
 
@@ -105,19 +111,13 @@ function profileRepo(searchRoot: string, repoPath: string): RepoProfile {
 }
 
 function countFilesByExtension(searchRoot: string): Map<string, number> {
+  // Delegate to the shared file-discovery helper so the exclusion set
+  // matches the chunker. Filter down to LANG_MAP keys afterwards.
+  const raw = sharedCountFilesByExtension(searchRoot);
   const counts = new Map<string, number>();
-  try {
-    const output = execSync(
-      `find "${searchRoot}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -path "*/build/*" -not -path "*/vendor/*" -not -path "*/__pycache__/*" -not -path "*/target/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null | sed 's/.*\\./\\./' | sort | uniq -c | sort -rn`,
-      { maxBuffer: 2 * 1024 * 1024, encoding: 'utf8' },
-    );
-    for (const line of output.trim().split('\n').filter(Boolean)) {
-      const match = line.trim().match(/^(\d+)\s+(\.\w+)$/);
-      if (match && LANG_MAP[match[2]]) {
-        counts.set(match[2], parseInt(match[1], 10));
-      }
-    }
-  } catch { /* empty repo or permission error */ }
+  for (const [ext, n] of raw) {
+    if (LANG_MAP[ext]) counts.set(ext, n);
+  }
   return counts;
 }
 
@@ -254,14 +254,7 @@ function detectUncheckable(searchRoot: string): UncheckableReport {
     ...minifiedFiles, ...generatedFiles, ...binaryAssets, ...vendoredCode, ...largeFiles,
   ]);
 
-  let totalFiles = 0;
-  try {
-    const output = execSync(
-      `find "${searchRoot}" -type f -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null | wc -l`,
-      { encoding: 'utf8' },
-    );
-    totalFiles = parseInt(output.trim(), 10) || 0;
-  } catch { /* */ }
+  const totalFiles = countAllFiles(searchRoot);
 
   const totalUncheckable = allUncheckable.size;
   const totalCheckable = Math.max(totalFiles - totalUncheckable, 0);
@@ -284,7 +277,7 @@ function detectUncheckable(searchRoot: string): UncheckableReport {
 function findMinifiedFiles(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( -name "*.min.js" -o -name "*.min.css" -o -name "*.bundle.js" -o -name "*.bundle.css" \\) -not -path "*/node_modules/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null`,
+      `find "${searchRoot}" -type f \\( -name "*.min.js" -o -name "*.min.css" -o -name "*.bundle.js" -o -name "*.bundle.css" \\) ${excludePathArgsForFind()} 2>/dev/null`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8' },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -294,7 +287,7 @@ function findMinifiedFiles(searchRoot: string): string[] {
 function findGeneratedFiles(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `grep -rl --exclude-dir=node_modules --exclude-dir=.git --exclude-dir=.claude --exclude-dir=generated --include="*.ts" --include="*.js" --include="*.tsx" --include="*.jsx" -m 1 -E "(// @generated|DO NOT EDIT|Auto-generated|This file is generated|GENERATED CODE)" "${searchRoot}" 2>/dev/null | head -100`,
+      `grep -rl ${excludeDirArgsForGrep()} --include="*.ts" --include="*.js" --include="*.tsx" --include="*.jsx" -m 1 -E "(// @generated|DO NOT EDIT|Auto-generated|This file is generated|GENERATED CODE)" "${searchRoot}" 2>/dev/null | head -100`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8' },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -304,7 +297,7 @@ function findGeneratedFiles(searchRoot: string): string[] {
 function findBinaryAssets(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( -name "*.wasm" -o -name "*.so" -o -name "*.dll" -o -name "*.pyc" -o -name "*.class" -o -name "*.o" \\) -not -path "*/node_modules/*" -not -path "*/.claude/*" -not -path "*/generated/*" 2>/dev/null`,
+      `find "${searchRoot}" -type f \\( -name "*.wasm" -o -name "*.so" -o -name "*.dll" -o -name "*.pyc" -o -name "*.class" -o -name "*.o" \\) ${excludePathArgsForFind()} 2>/dev/null`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8' },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -326,7 +319,7 @@ function findVendoredDirs(searchRoot: string): string[] {
 function findLargeFiles(searchRoot: string): string[] {
   try {
     const output = execSync(
-      `find "${searchRoot}" -type f \\( ${Object.keys(LANG_MAP).map(e => `-name "*${e}"`).join(' -o ')} \\) -not -path "*/node_modules/*" -not -path "*/.git/*" -not -path "*/dist/*" -not -path "*/.claude/*" -not -path "*/generated/*" -exec sh -c 'wc -l "$1" | awk "\\$1 > ${READ_TOOL_LINE_LIMIT} {print \\$2}"' _ {} \\; 2>/dev/null | head -50`,
+      `find "${searchRoot}" -type f \\( ${Object.keys(LANG_MAP).map(e => `-name "*${e}"`).join(' -o ')} \\) ${excludePathArgsForFind()} -exec sh -c 'wc -l "$1" | awk "\\$1 > ${READ_TOOL_LINE_LIMIT} {print \\$2}"' _ {} \\; 2>/dev/null | head -50`,
       { maxBuffer: 1024 * 1024, encoding: 'utf8', timeout: 10000 },
     );
     return output.trim().split('\n').filter(Boolean);
@@ -472,13 +465,6 @@ function predictAgentEffectiveness(
         : 'No frontend framework detected — agent analyzes JSX/TSX UI elements',
     },
     {
-      agent: 'stale-closure',
-      effective: hasTS && hasFrontend,
-      reason: hasTS && hasFrontend
-        ? 'React/Vue with hooks detected'
-        : 'No React/Vue hooks — stale closure checks not applicable',
-    },
-    {
       agent: 'test-runner',
       effective: testInfra.hasTestFramework,
       reason: testInfra.hasTestFramework
@@ -598,7 +584,7 @@ function generateRecommendations(
       priority: 'medium',
       category: 'agent-config',
       title: `Only ${tsPercentage}% TypeScript/JavaScript`,
-      description: 'Several agents (ui-intent-verifier, stale-closure, i18n-missing-key) are optimized for JS/TS. Non-JS/TS code relies primarily on code-reviewer and security-reviewer.',
+      description: 'Several agents (ui-intent-verifier, i18n-missing-key) are optimized for JS/TS. Non-JS/TS code relies primarily on code-reviewer and security-reviewer.',
       action: 'Review agent skip predictions in testability report for language-specific gaps.',
     });
   }

@@ -1,4 +1,4 @@
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, readdirSync } from 'node:fs';
 import * as readline from 'node:readline';
 import type {
@@ -25,6 +25,9 @@ import {
 } from '../../scripts/qa-markdown-reports.js';
 import { discoverSourceFiles, buildChunkPlan, isChunkedAgent, buildChunkPromptSuffix, formatChunkPlanSummary } from './chunker.js';
 import { scanTestability, writeTestabilityReport, printTestabilitySummary } from './testability-scanner.js';
+import { runPreflight, type PreflightReport } from './preflight.js';
+import { verifyRun } from './run-verifier.js';
+import { getAgentScope } from './agent-scopes.js';
 import {
   registerAdapter, resolveCliProviders, printCapabilityReport, getAdapter,
 } from './adapters/index.js';
@@ -238,16 +241,45 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
   const allSourceFiles = discoverSourceFiles(config.repoPath, config.moduleScope, excludedFileSet);
   config.sourceFiles = new Set(allSourceFiles);
   bag.allSourceFiles = allSourceFiles;
+  // mode=full implies "audit this repo thoroughly," not "this exact
+  // percentage of files." If the operator didn't explicitly pick a
+  // coverage strategy, upgrade the default from `balanced` (65%) to
+  // `thorough` (85%) so full mode actually audits most of the source.
+  // Explicit --coverage or QA_COVERAGE_STRATEGY wins over this default.
+  const defaultStrategy: CoverageStrategy = config.mode === 'full' ? 'thorough' : 'balanced';
   const strategy: CoverageStrategy = config.coverageStrategy
     ?? modelsConfig.coverageStrategy
-    ?? 'balanced';
+    ?? defaultStrategy;
   bag.strategy = strategy;
   const chunkPlan = buildChunkPlan(allSourceFiles, agents, [...excludedFileSet], strategy);
   bag.chunkPlan = chunkPlan;
   const strategyConfig = getStrategyConfig(strategy);
   bag.strategyConfig = strategyConfig;
-  const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig);
+  const babysitter = new CoverageBabysitter(allSourceFiles, strategy, strategyConfig, config.repoPath);
   bag.babysitter = babysitter;
+
+  // 6.0. Preflight gate — repo census, plan preview, scale-derived success
+  // criteria, prior-run gap detection, and the 3-way gap-healing choice
+  // (auto-heal / report / fail+script). Runs interactively unless
+  // QA_PREFLIGHT=skip is set. Produces preflight.json for Phase 3's
+  // run-verifier to grade the actual run against.
+  const preflightReport = await runPreflight({
+    config,
+    agents,
+    allSourceFiles,
+    chunkPlan,
+    strategy,
+    targetCoveragePercent: strategyConfig.targetCoveragePercent,
+    runDir,
+    testabilityCheckabilityPercent: testabilityReport.uncheckable.checkabilityScore,
+    testabilityUncheckableCount: testabilityReport.uncheckable.totalUncheckable,
+    agentsToSkip,
+  });
+  bag.preflightReport = preflightReport;
+  if (!preflightReport.proceed) {
+    process.stderr.write('\n[preflight] aborted by user — no agents dispatched.\n');
+    return;
+  }
 
   // 6.1. Observability-level check for babysitting
   // Find the best observability level across all available providers.
@@ -398,6 +430,23 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       const label = chunk ? `${agent.name}-chunk-${chunk.id}` : agent.name;
       jobs.push({ agent, chunk, label });
     }
+  }
+
+  // 8.5. Gap-healing jobs (preflight option 1 — auto-heal). Runs alongside
+  // the main wave with a `-heal` label suffix so findings and session logs
+  // don't clobber the primary agent's output. Tier escalation comes from
+  // config/models.yaml.agentOverrides (doc-reviewer / sca-reviewer →
+  // heavy) so no extra plumbing is needed here.
+  if (preflightReport.healJobs.length > 0) {
+    for (const healJob of preflightReport.healJobs) {
+      const agent = agents.find(a => a.name === healJob.agentName);
+      if (!agent) continue;
+      jobs.push({ agent, chunk: null, label: `${agent.name}-heal` });
+    }
+    process.stderr.write(
+      `\n[preflight] injected ${preflightReport.healJobs.length} heal job(s): ` +
+      `${preflightReport.healJobs.map(j => j.agentName).join(', ')}\n`,
+    );
   }
 
   // Scheduling: primary key is stage (upstream-data dependencies between
@@ -566,15 +615,22 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         delegationPrompt += buildRefDocPromptSuffix(config.claimsManifestPath);
       }
 
-      // Inject uncovered files as priority targets for unchunked agents
+      // Inject uncovered files as priority targets for unchunked agents.
+      // Use path.relative so trailing-slash / canonicalization quirks can't
+      // leak absolute paths into the prompt (which then look ridiculous to
+      // the agent and add noise to its context).
       if (injectScopeHint) {
         const priorityFiles = babysitter.getUncoveredFilesForHint(50);
         if (priorityFiles.length > 0) {
-          const relative = priorityFiles.map(f => f.replace(config.repoPath + '/', ''));
-          delegationPrompt +=
-            `\n\nPRIORITY FILES — The following files have not been examined by other agents yet. ` +
-            `Include them in your analysis where relevant to your domain:\n` +
-            relative.map(f => `  ${f}`).join('\n') + '\n';
+          const relativePaths = priorityFiles
+            .map(f => relative(config.repoPath, f))
+            .filter(f => !f.startsWith('..') && f.length > 0);
+          if (relativePaths.length > 0) {
+            delegationPrompt +=
+              `\n\nPRIORITY FILES — The following files have not been examined by other agents yet. ` +
+              `Include them in your analysis where relevant to your domain:\n` +
+              relativePaths.map(f => `  ${f}`).join('\n') + '\n';
+          }
         }
       }
 
@@ -600,9 +656,50 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
         babysitter.recordAgentRun(agentLabel, cappedLog);
       }
 
-      if (chunk) {
-        const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
-        status.coveragePercent = chunkEval.coveragePercent;
+      // Category-aware Files column population. The previous "examined /
+      // 1297 source files" for every agent misled the operator when
+      // build-verifier (a shell-driven agent) looked like it examined 0%
+      // of the repo. Now each category renders appropriately.
+      if (babysittingEnabled) {
+        const examined = babysitter.getFilesExaminedByAgent(agentLabel);
+        const scope = agent.scopeCategory ?? getAgentScope(agent.name).category;
+
+        if (chunk) {
+          // Chunked agents keep chunk-scoped rendering.
+          const chunkEval = babysitter.evaluateChunkCoverage(agentLabel, chunk);
+          status.coveragePercent = chunkEval.coveragePercent;
+          status.filesAssigned = chunk.files.length;
+          status.filesDisplay = {
+            kind: 'chunked',
+            examined: Math.round((chunkEval.coveragePercent / 100) * chunk.files.length),
+            assigned: chunk.files.length,
+            percent: chunkEval.coveragePercent,
+          };
+        } else if (scope === 'pattern') {
+          // Pattern agents: denominator = files matching their glob set.
+          const agentScope = getAgentScope(agent.name);
+          const assigned = countPatternMatches(allSourceFiles, agentScope.patterns ?? []);
+          status.filesAssigned = assigned;
+          status.coveragePercent = assigned > 0 ? Math.round((examined / assigned) * 100) : 0;
+          status.filesDisplay = {
+            kind: 'pattern',
+            examined,
+            assigned,
+            percent: status.coveragePercent,
+          };
+        } else if (scope === 'synthesis') {
+          const readCount = babysitter.getFindingsReadByAgent(agentLabel);
+          status.filesDisplay = { kind: 'synthesis', readCount };
+        } else if (scope === 'probe') {
+          const probeCount = babysitter.getProbeCountByAgent(agentLabel);
+          const label = getAgentScope(agent.name).probeLabel ?? 'probes';
+          status.filesDisplay = { kind: 'probe', probeCount, label };
+        } else if (scope === 'command') {
+          status.filesDisplay = { kind: 'command', examined };
+        } else {
+          // hybrid (or anything unclassified)
+          status.filesDisplay = { kind: 'hybrid', examined };
+        }
       }
 
       // Prefer the canonical JSON file contract: findings/<agent>.json.
@@ -669,6 +766,17 @@ export async function runOrchestration(config: OrchestrationConfig): Promise<voi
       if (status.startedAt) {
         status.durationMs = Date.now() - new Date(status.startedAt).getTime();
       }
+      // Stub-write the expected JSON artifacts so finalization can tell
+      // "agent timed out" from "agent was never invoked." Without these
+      // files, run-verifier's per-agent checks can't distinguish the two,
+      // and the agent gets credited with zero-by-omission instead of
+      // zero-by-failure. Skip if a prior attempt already wrote findings.
+      const isTimeout = /exceeded \d+s hard timeout/.test(msg);
+      writeStubAgentArtifacts(runDir, agent.name, {
+        status: isTimeout ? 'timeout' : 'error',
+        error: msg.slice(0, 500),
+        provider: status.provider ?? 'unknown',
+      });
       // Surface the real failure reason immediately — don't make the operator
       // wait for meta.json finalization to find out why an agent died. The
       // dashboard only shows "FAILED" without the message.
@@ -811,11 +919,80 @@ async function showConsentPrompt(providers: ProviderName[], repoPath: string): P
   writeFileSync(consentFile, JSON.stringify(existing, null, 2));
 }
 
+// Count files from `allSourceFiles` that match any pattern in the given
+// list. Patterns are glob-ish: `**` matches any path segment, `*` matches
+// within one segment, and a trailing `/**` matches a directory subtree.
+// Used by Phase 8 to compute the Files-column denominator for
+// pattern-scoped agents (rbac-reviewer, api-spec-reviewer, etc.).
+function countPatternMatches(allFiles: readonly string[], patterns: readonly string[]): number {
+  if (patterns.length === 0) return 0;
+  const regexes = patterns.map(patternToRegex);
+  let count = 0;
+  for (const f of allFiles) {
+    for (const r of regexes) {
+      if (r.test(f)) { count++; break; }
+    }
+  }
+  return count;
+}
+
+function patternToRegex(pattern: string): RegExp {
+  // Escape regex specials except glob markers, then translate glob tokens.
+  // The character class MUST include `\\` — without it, a backslash in a
+  // glob pattern (e.g. Windows-style `apps\src\*.py`) leaks through and
+  // becomes a regex meta-character at compile time (e.g. `\s` → whitespace
+  // token). CodeQL js/incomplete-sanitization flagged the missing \\.
+  const escaped = pattern
+    .replace(/[\\.+^$()|[\]{}]/g, '\\$&')
+    .replace(/\*\*/g, '\x00')                    // placeholder
+    .replace(/\*/g, '[^/]*')
+    .replace(/\x00/g, '.*')
+    .replace(/\?/g, '.');
+  return new RegExp(`(^|/)${escaped}$`);
+}
+
 function formatTime(): string {
   const now = new Date();
   return [now.getHours(), now.getMinutes(), now.getSeconds()]
     .map(n => String(n).padStart(2, '0'))
     .join('-');
+}
+
+// Human-readable local timestamp: 'YYYY-MM-DD HH:MM:SS TZ' (e.g., '2026-04-23 16:17:31 PDT').
+// Falls back to an abbreviation-less string if the JS runtime cannot resolve one.
+function formatLocalTimestamp(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const y = d.getFullYear();
+  const mo = pad(d.getMonth() + 1);
+  const da = pad(d.getDate());
+  const h = pad(d.getHours());
+  const mi = pad(d.getMinutes());
+  const s = pad(d.getSeconds());
+  let tzAbbrev = '';
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(d);
+    tzAbbrev = parts.find(p => p.type === 'timeZoneName')?.value ?? '';
+  } catch {
+    tzAbbrev = '';
+  }
+  return `${y}-${mo}-${da} ${h}:${mi}:${s}${tzAbbrev ? ` ${tzAbbrev}` : ''}`;
+}
+
+// Read startedAt from an existing meta.json on disk. Used by the finalizer to
+// preserve the true run-start time that the pre-seed writer captured, rather
+// than clobbering it with `new Date()` at finalize time.
+function readStartedAtFromMeta(metaPath: string): string | null {
+  try {
+    if (!existsSync(metaPath)) return null;
+    const raw = readFileSync(metaPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && typeof parsed.startedAt === 'string') {
+      return parsed.startedAt;
+    }
+  } catch {
+    // Corrupt or unreadable pre-seed meta.json — fall through to RunState fallback.
+  }
+  return null;
 }
 
 // --- Agent staging (upstream-data dependencies) ---
@@ -859,7 +1036,10 @@ const AGENT_STAGES: Record<string, number> = {
   'spec-verifier': 1,
   'ui-intent-verifier': 1,
   'stub-detector': 1,
+  'python-linter': 1,          // project Python static analysis — independent
+  'cost-analyzer': 1,          // infra cost surface — independent
   // Stage 2
+  'iam-drift-auditor': 2,      // reads IAM from every layer; benefits from other stage-1 outputs
   'schema-migration-reviewer': 2,
   'mock-integrity-checker': 2,
   'environment-parity-checker': 2,
@@ -984,6 +1164,40 @@ interface FinalizerBag {
   dashboard?: DashboardController;
   ttyRenderer?: TtyRenderer;
   auditor?: QualityAuditor;
+  preflightReport?: PreflightReport;
+}
+
+// Write stub findings + handoff JSON for an agent that failed (timeout or
+// error) before it could emit its own artifacts. The finalizer reads these
+// files; without them, the agent shows up as "never invoked" rather than
+// "ran and failed," and run-verifier can't credit it in per-agent tables.
+function writeStubAgentArtifacts(
+  runDir: string,
+  agentName: string,
+  meta: { status: 'timeout' | 'error'; error: string; provider: string },
+): void {
+  const findingsDir = join(runDir, 'findings');
+  const agentDataDir = join(runDir, 'agent-data');
+  try { mkdirSync(findingsDir, { recursive: true }); } catch { /* exists */ }
+  try { mkdirSync(agentDataDir, { recursive: true }); } catch { /* exists */ }
+
+  const findingsPath = join(findingsDir, `${agentName}.json`);
+  const handoffPath = join(agentDataDir, `${agentName}.output.json`);
+
+  // Don't clobber real output from a prior successful attempt in the same run.
+  if (!existsSync(findingsPath)) {
+    try {
+      writeFileSync(findingsPath, JSON.stringify({
+        findings: [],
+        _meta: { status: meta.status, error: meta.error, provider: meta.provider, agent: agentName },
+      }, null, 2));
+    } catch { /* best-effort; finalizer will log if needed */ }
+  }
+  if (!existsSync(handoffPath)) {
+    try {
+      writeFileSync(handoffPath, '{}');
+    } catch { /* best-effort */ }
+  }
 }
 
 function writePreSeedMeta(metaPath: string, config: OrchestrationConfig): void {
@@ -1108,6 +1322,16 @@ async function finalizeRun(
       ? (caughtError instanceof Error ? caughtError.message : String(caughtError))
       : undefined;
 
+    // Preserve the true run-start time. The pre-seed meta.json written at
+    // run start holds the authoritative startedAt; carry it forward so
+    // duration-based analysis has real numbers instead of (completedAt === now).
+    const completedAtDate = new Date();
+    const startedAtIso = readStartedAtFromMeta(metaPath)
+      ?? (bag.runState ? new Date(bag.runState.getRunStartTime()).toISOString() : completedAtDate.toISOString());
+    const startedAtDate = new Date(startedAtIso);
+
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
     writeFileSync(metaPath, JSON.stringify({
       runId: config.runId,
       projectSlug: config.projectSlug,
@@ -1119,8 +1343,11 @@ async function finalizeRun(
       status,
       error: errorMessage,
       finalizationErrors: finalizationErrors.length > 0 ? finalizationErrors : undefined,
-      startedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
+      startedAt: startedAtIso,
+      completedAt: completedAtDate.toISOString(),
+      startedAtLocal: formatLocalTimestamp(startedAtDate),
+      completedAtLocal: formatLocalTimestamp(completedAtDate),
+      tz,
       dataClassification: modelsConfig.dataClassification,
       providers: { api: bag.apiAvail, cli: bag.cliAvail, disabled: bag.disabled },
       testability: bag.testabilityReport ? {
@@ -1147,6 +1374,18 @@ async function finalizeRun(
       fallbackEvents: bag.runState?.getFallbackEvents() ?? [],
       qualityAudit: bag.auditor?.getResults() ?? [],
     }, null, 2));
+  });
+
+  // 9.5. Run quality verification — grade actual run artifacts against the
+  //      preflight's scale-adaptive expectations. Produces run-quality.json.
+  //      Phase 3 partial-run labeling in qa-report.md and qa-gaps.md reads
+  //      this file. Does not override the release-gate verdict.
+  await runStep('verifyRun', () => {
+    verifyRun({
+      runDir,
+      projectSlug: config.projectSlug,
+      runId: config.runId,
+    });
   });
 
   // 10. Human-facing markdown reports — documented exception to the JSON-only

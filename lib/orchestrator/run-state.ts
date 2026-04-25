@@ -1,4 +1,4 @@
-import type { AgentRunStatus, ProviderName, FallbackEvent, TokenBudget, CoverageStrategy } from './types.js';
+import type { AgentRunStatus, ProviderName, FallbackEvent, TokenBudget, CoverageStrategy, FilesDisplay } from './types.js';
 import type { CoverageBabysitter } from './coverage-babysitter.js';
 
 /**
@@ -69,7 +69,10 @@ export interface RunStateSnapshot {
     model: string;
     tokens: number;
     findings: number;
+    // Legacy chunked-style files rendering — kept for backward compat.
+    // Prefer `filesDisplay` (category-aware) when present.
     files: { examined: number; assigned: number; percent: number } | null;
+    filesDisplay: FilesDisplay | null;
     durationMs: number;
     error: string | null;
   }>;
@@ -115,6 +118,10 @@ export class RunState {
     this.totalFiles = count;
   }
 
+  getRunStartTime(): number {
+    return this.runStartTime;
+  }
+
   registerAgent(name: string): AgentRunStatus {
     const status: AgentRunStatus = {
       agentName: name,
@@ -135,6 +142,7 @@ export class RunState {
       outputSizeBytes: 0,
       coveragePercent: null,
       filesAssigned: null,
+      filesDisplay: null,
       error: null,
     };
     this.agents.set(name, status);
@@ -246,6 +254,7 @@ export class RunState {
         assigned: s.filesAssigned,
         percent: s.coveragePercent,
       } : null,
+      filesDisplay: s.filesDisplay,
       durationMs: s.durationMs > 0 ? s.durationMs
         : s.startedAt ? now - new Date(s.startedAt).getTime()
         : 0,

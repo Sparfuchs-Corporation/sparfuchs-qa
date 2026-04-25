@@ -82,6 +82,37 @@ gemini   # complete browser login once; creds cached at ~/.gemini/oauth_creds.js
 
 Resolution priority (highest first): keychain → shell env var → `~/.gemini/oauth_creds.json` (Gemini CLI only). `make qa-keys-check` reports which keychain entries exist.
 
+## Run mode vs. coverage strategy
+
+Two independent axes. Both default to sensible values but do not mean the same thing — `mode: full` does NOT audit every file.
+
+**`mode`** — which agents run
+- `full` — every agent in the registry (default for `make qa-review`)
+- `review` / `tier1` / `tier2` / `diff` / `selective` / `training` / `docs` — subsets
+
+**`coverageStrategy`** — how deep file sampling goes
+- `sweep` — ~40% target, fast
+- `balanced` — ~65% target, default for non-full modes
+- `thorough` — ~85% target, auto-default when `mode: full` (upgraded from `balanced` in Phase 4 of preflight-census work)
+- `exhaustive` — ~100% target, audits every file
+
+Override via `QA_COVERAGE_STRATEGY=exhaustive` or the `coverageStrategy:` field in `config/models.yaml`. Preflight prints the effective strategy + computed success criteria before dispatch — see `Preflight gate` below.
+
+## Preflight gate
+
+Every run prints a repo census, a plan preview, and scale-adaptive success criteria **before** dispatching agents. The operator confirms with `[y/N]`. When prior-run gaps are detected, a second prompt offers:
+- `[1] Auto-heal` — inject heal jobs alongside the main wave
+- `[2] Report only` — proceed; gaps surface in qa-gaps.md § Run Quality Deficit
+- `[3] Fail + script` — abort, write `remediation-commands.sh` with targeted `AGENT_ONLY=<name>` / `MODULE=<path>` invocations
+
+**Env bypasses:**
+- `QA_PREFLIGHT=skip` — auto-accept everything (CI path; picks "Report only" for gap handling).
+- `QA_GAP_HEAL=auto|report|fail` — pre-select gap-handling choice.
+- `AGENT_ONLY=<agent-name>` — restrict the run to a single agent (used by the fail-script flow).
+- `MODULE=<subpath>` — restrict discovery to one subdirectory.
+
+Preflight writes `preflight.json` into the run dir; post-run, `run-verifier` grades actual results against it and writes `run-quality.json`. When any criterion misses, qa-report.md prepends a "Run Quality — PARTIAL" block and qa-gaps.md gets a "Run Quality Deficit" section with observed / expected / cause / remediation for each failing check. The release-gate verdict is NOT overridden.
+
 ## Architecture
 
 - `canaries/` — QA canary checks (code-quality, security, perf, i18n, rbac)

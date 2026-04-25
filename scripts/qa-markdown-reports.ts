@@ -77,6 +77,19 @@ function loadJson<T>(path: string): T | null {
   }
 }
 
+// Human-readable duration: '2h 1m 33s', '45s', '3m 4s'. Drops leading zero units.
+function formatDuration(ms: number): string {
+  const totalSeconds = Math.floor(ms / 1000);
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0 || h > 0) parts.push(`${m}m`);
+  parts.push(`${s}s`);
+  return parts.join(' ');
+}
+
 // Locate the session-log markdown that a given agent wrote. Session logs are
 // named `${HH-MM-SS}_${agentLabel}.md` in sessionLogDir. When multiple exist
 // (retries / chunks), prefer the most recent.
@@ -123,13 +136,65 @@ export function generateQaReport(input: GenerateQaReportInput): void {
   lines.push(`# QA Report — ${input.projectSlug}`);
   lines.push('');
   lines.push(`**Run**: ${input.runId}`);
-  if (typeof meta.startedAt === 'string') lines.push(`**Started**: ${meta.startedAt}`);
+
+  const startedAtUtc = typeof meta.startedAt === 'string' ? meta.startedAt : null;
+  const completedAtUtc = typeof meta.completedAt === 'string' ? meta.completedAt : null;
+  const startedAtLocal = typeof meta.startedAtLocal === 'string' ? meta.startedAtLocal : null;
+  const completedAtLocal = typeof meta.completedAtLocal === 'string' ? meta.completedAtLocal : null;
+
+  if (startedAtUtc) {
+    lines.push(startedAtLocal
+      ? `**Started**: ${startedAtLocal}  (UTC: ${startedAtUtc})`
+      : `**Started**: ${startedAtUtc}`);
+  }
+  if (completedAtUtc) {
+    lines.push(completedAtLocal
+      ? `**Completed**: ${completedAtLocal}  (UTC: ${completedAtUtc})`
+      : `**Completed**: ${completedAtUtc}`);
+  }
+  if (startedAtUtc && completedAtUtc) {
+    const durationMs = Date.parse(completedAtUtc) - Date.parse(startedAtUtc);
+    if (Number.isFinite(durationMs) && durationMs >= 0) {
+      lines.push(`**Duration**: ${formatDuration(durationMs)}`);
+    }
+  }
+
   if (typeof meta.mode === 'string') lines.push(`**Mode**: ${meta.mode}`);
   if (typeof meta.status === 'string') lines.push(`**Status**: ${meta.status}`);
   if (typeof meta.isGitRepo === 'boolean') {
     lines.push(`**Git-backed target**: ${meta.isGitRepo ? 'yes' : 'NO — no VCS backup for this run'}`);
   }
   lines.push('');
+
+  // Run-quality labeling (Phase 3). Prepends a PARTIAL / PASS block above
+  // the Release-Gate Verdict so the operator sees honest signal before
+  // severity-based ship/block guidance. Adjacent to — not overriding —
+  // the release gate.
+  const runQuality = loadJson<{
+    passed: number; failed: number; total: number; passRatePercent: number;
+    partialRun: boolean; checks: Array<{ id: string; status: string; observed: unknown; expected: string }>;
+  }>(join(input.runDir, 'run-quality.json'));
+  if (runQuality) {
+    if (runQuality.partialRun) {
+      lines.push(`## Run Quality — PARTIAL`);
+      lines.push('');
+      lines.push(
+        `This was a **partial** run. ${runQuality.failed} of ${runQuality.total} ` +
+        `preflight criteria missed (${runQuality.passRatePercent}% pass rate).`,
+      );
+      lines.push('');
+      for (const c of runQuality.checks) {
+        if (c.status !== 'fail') continue;
+        lines.push(`- **${c.id}**: observed \`${c.observed}\`, expected \`${c.expected}\``);
+      }
+      lines.push('');
+      lines.push('**See qa-gaps.md § Run Quality Deficit for causes and remediation.**');
+      lines.push('');
+    } else {
+      lines.push(`## Run Quality — PASS (${runQuality.passed}/${runQuality.total} criteria)`);
+      lines.push('');
+    }
+  }
 
   // Fold in release-gate-synthesizer verdict if available.
   const gateOutput = readIfExists(findAgentSessionLog(input.sessionLogDir, 'release-gate-synthesizer'));
@@ -426,6 +491,34 @@ export function generateQaGaps(input: GenerateQaGapsInput): void {
   lines.push('');
   lines.push(`**Run**: ${input.runId}`);
   lines.push('');
+
+  // Run Quality Deficit (Phase 3). Leads the document when the preflight's
+  // scale-adaptive expectations weren't met — failed checks with cause +
+  // remediation strings come straight from run-verifier.
+  const runQuality = loadJson<{
+    passed: number; failed: number; total: number;
+    checks: Array<{ id: string; status: string; observed: unknown; expected: string; cause?: string; remediation?: string }>;
+  }>(join(input.runDir, 'run-quality.json'));
+  if (runQuality && runQuality.failed > 0) {
+    lines.push('## Run Quality Deficit');
+    lines.push('');
+    lines.push(
+      `${runQuality.failed} of ${runQuality.total} preflight criteria missed. ` +
+      'Each failing check below names what was observed, what was expected, ' +
+      'and — where the pattern is known — a concrete remediation.',
+    );
+    lines.push('');
+    for (const c of runQuality.checks) {
+      if (c.status !== 'fail') continue;
+      lines.push(`### ${c.id}`);
+      lines.push('');
+      lines.push(`- **Observed**: \`${String(c.observed)}\``);
+      lines.push(`- **Expected**: \`${c.expected}\``);
+      if (c.cause) lines.push(`- **Cause**: ${c.cause}`);
+      if (c.remediation) lines.push(`- **Remediation**: ${c.remediation}`);
+      lines.push('');
+    }
+  }
 
   if (analyzerOutput) {
     lines.push(analyzerOutput.trim());
